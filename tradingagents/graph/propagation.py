@@ -37,6 +37,16 @@ class Propagator:
             "portfolio_context": portfolio_context,
             "investment_debate_state": InvestDebateState(
                 {
+                    "bull_initial": "",
+                    "bear_initial": "",
+                    "rebuttal_history": "",
+                    "review_outcomes": "",
+                    "current_bull_response": "",
+                    "current_bear_response": "",
+                    "pending_bull_rebuttal": "",
+                    "bull_rebuttal_count": 0,
+                    "bear_rebuttal_count": 0,
+                    "debate_round": 0,
                     "bull_history": "",
                     "bear_history": "",
                     "history": "",

@@ -15,6 +15,9 @@ Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
 Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
-Conversation history of the debate: {history}
-Last bull argument: {current_response}
-Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
+Cross-review round: {review_round}
+Your previous Bear output: {own_previous_response}
+Bull's output from the previous completed phase or round: {opponent_previous_response}
+Classified outcomes from prior rounds: {review_outcomes}
+
+{review_guidance}

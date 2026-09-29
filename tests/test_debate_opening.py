@@ -66,23 +66,27 @@ def test_helper_marks_empty_and_passes_through():
 # --- researchers ------------------------------------------------------------
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "factory,opponent",
-    [(create_bull_researcher, "bear"), (create_bear_researcher, "bull")],
-)
-def test_researcher_opening_has_no_phantom_opponent(factory, opponent):
+@pytest.mark.parametrize("factory", [create_bull_researcher, create_bear_researcher])
+def test_researcher_initial_thesis_has_no_phantom_opponent(factory):
     captured = {}
     factory(_capturing_llm(captured))(_investment_state(""))
-    assert "has not spoken yet" in captured["prompt"]
+    assert "independent initial thesis" in captured["prompt"]
 
 
 @pytest.mark.unit
 def test_researcher_passes_real_opponent_argument():
     captured = {}
     state = _investment_state("Bear Analyst: valuation is stretched")
+    state["investment_debate_state"].update({
+        "bull_initial": "Bull Analyst (Initial): growth is durable",
+        "bear_initial": "Bear Analyst (Initial): valuation is stretched",
+        "current_bull_response": "Bull Analyst (Initial): growth is durable",
+        "current_bear_response": "Bear Analyst (Initial): valuation is stretched",
+        "rebuttal_history": "",
+        "debate_round": 0,
+    })
     create_bull_researcher(_capturing_llm(captured))(state)
     assert "valuation is stretched" in captured["prompt"]
-    assert "has not spoken yet" not in captured["prompt"]
 
 
 # --- risk debators ----------------------------------------------------------

@@ -15,8 +15,22 @@ The debate always contains conflicting arguments; deciding which side is stronge
 
 ---
 
-**Debate History:**
-{history}
+**Independent Bull Thesis:**
+{bull_initial}
+
+**Independent Bear Thesis:**
+{bear_initial}
+
+**Classified Review Outcomes:**
+{review_outcomes}
+
+Treat claims marked ACCEPTED as corrected or withdrawn, not as valid evidence for the original claim.
+
+**Final Bull Position:**
+{final_bull_response}
+
+**Final Bear Position:**
+{final_bear_response}
 
 ## Output
 

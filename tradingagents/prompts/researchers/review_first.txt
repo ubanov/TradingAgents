@@ -1,0 +1,8 @@
+Review the opponent's independent thesis broadly, but do not restate your full thesis.
+
+For each material dispute, use one concise line beginning with exactly one of:
+- ACCEPTED: The opponent correctly identified an error or unsupported claim. Acknowledge the correction and stop defending the old claim.
+- REJECTED: The objection is not accepted. Explain why using concrete supplied evidence or arithmetic.
+- UNRESOLVED: The supplied evidence cannot determine which interpretation is correct.
+
+If there are no meaningful disagreements to review, say so briefly. End with a short list of the disagreements that remain genuinely unresolved.

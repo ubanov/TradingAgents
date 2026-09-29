@@ -17,8 +17,25 @@ def _state(latest_speaker, count=0):
     return {"risk_debate_state": {"latest_speaker": latest_speaker, "count": count}}
 
 
-def _debate_state(current_response, count=0):
-    return {"investment_debate_state": {"current_response": current_response, "count": count}}
+def _debate_state(
+    current_response="",
+    count=0,
+    *,
+    bull_initial="",
+    bear_initial="",
+    debate_round=0,
+    pending_bull_rebuttal="",
+):
+    return {
+        "investment_debate_state": {
+            "current_response": current_response,
+            "count": count,
+            "bull_initial": bull_initial,
+            "bear_initial": bear_initial,
+            "debate_round": debate_round,
+            "pending_bull_rebuttal": pending_bull_rebuttal,
+        }
+    }
 
 
 @pytest.mark.unit
@@ -73,9 +90,20 @@ def test_debate_router_return_always_routable(current_response):
 def test_debate_path_map_covers_full_router_range():
     logic = ConditionalLogic(max_debate_rounds=1)
     returns = {
-        logic.should_continue_debate(_debate_state(s, c))
-        for s in ("Bull", "Bear", "drift")
-        for c in (0, 99)
+        logic.should_continue_debate(state)
+        for state in (
+            _debate_state(),
+            _debate_state(bull_initial="bull"),
+            _debate_state(bull_initial="bull", bear_initial="bear"),
+            _debate_state(
+                bull_initial="bull",
+                bear_initial="bear",
+                pending_bull_rebuttal="review",
+            ),
+            _debate_state(
+                bull_initial="bull", bear_initial="bear", debate_round=1
+            ),
+        )
     }
     assert returns <= set(DEBATE_PATH_MAP)
     assert "Research Manager" in returns  # terminal reachable

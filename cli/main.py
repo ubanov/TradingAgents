@@ -1,8 +1,16 @@
 import sys
+from pathlib import Path
 
 import typer
 
 from cli.display import console
+from cli.headless import (
+    parse_analysts,
+    parse_depth,
+    parse_tickers,
+    run_batch_analysis,
+    run_single_analysis,
+)
 from cli.run import run_analysis
 from tradingagents.backtest import iter_grid, run_backtest, summarize
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -76,6 +84,97 @@ def analyze(
             err=True,
         )
         raise typer.Exit(code=1) from None
+
+
+@app.command("run")
+def run_non_interactive(
+    ticker: str = typer.Option(..., "--ticker", help="Ticker symbol to analyze"),
+    date: str = typer.Option(..., "--date", help="Analysis date, YYYY-MM-DD"),
+    analysts: str = typer.Option(
+        ..., "--analysts", help="Comma-separated analysts"
+    ),
+    depth: str = typer.Option(
+        ..., "--depth", help="Research depth: shallow, medium, or deep"
+    ),
+    language: str = typer.Option(..., "--language", help="Output language"),
+    output_dir: Path = typer.Option(  # noqa: B008 - Typer option declaration
+        ..., "--output-dir", help="Directory for the report and result.json"
+    ),
+):
+    """Run one analysis without interactive prompts."""
+    try:
+        _, depth_value = parse_depth(depth)
+        analyst_names = parse_analysts(analysts)
+        typer.echo(f"Analysis date: {date}")
+        result = run_single_analysis(
+            ticker=ticker,
+            analysis_date=date,
+            analysts=analyst_names,
+            depth_value=depth_value,
+            language=language,
+            output_dir=output_dir,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(f"Completed {result['ticker']}")
+    typer.echo(f"Report: {output_dir.resolve() / 'complete_report.md'}")
+    typer.echo(f"Result: {output_dir.resolve() / 'result.json'}")
+
+
+@app.command("batch")
+def batch_non_interactive(
+    date: str = typer.Option(..., "--date", help="Analysis date, YYYY-MM-DD"),
+    analysts: str = typer.Option(
+        ..., "--analysts", help="Comma-separated analysts"
+    ),
+    depth: str = typer.Option(
+        ..., "--depth", help="Research depth: shallow, medium, or deep"
+    ),
+    language: str = typer.Option(..., "--language", help="Output language"),
+    output_dir: Path = typer.Option(  # noqa: B008 - Typer option declaration
+        ..., "--output-dir", help="Batch output directory"
+    ),
+    tickers: str | None = typer.Option(
+        None, "--tickers", help="Comma-separated ticker symbols"
+    ),
+    tickers_file: Path | None = typer.Option(  # noqa: B008 - Typer option declaration
+        None, "--tickers-file", help="UTF-8 file with one ticker per line"
+    ),
+):
+    """Run multiple analyses sequentially without interactive prompts."""
+    try:
+        depth_name, depth_value = parse_depth(depth)
+        analyst_names = parse_analysts(analysts)
+        ticker_names = parse_tickers(tickers, tickers_file)
+    except (OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    typer.echo(f"Analysis date: {date}")
+    try:
+        results, summary_path, _ = run_batch_analysis(
+            tickers=ticker_names,
+            analysis_date=date,
+            analysts=analyst_names,
+            depth_name=depth_name,
+            depth_value=depth_value,
+            language=language,
+            output_dir=output_dir,
+            progress=typer.echo,
+        )
+    except Exception as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    successful = sum(result["status"] == "ok" for result in results)
+    failed = len(results) - successful
+    typer.echo("Batch completed")
+    typer.echo(f"Successful: {successful}")
+    typer.echo(f"Failed: {failed}")
+    typer.echo(f"Summary: {summary_path}")
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()

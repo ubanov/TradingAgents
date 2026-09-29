@@ -17,15 +17,26 @@ def create_research_manager(llm):
 
     def research_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
-        history = state["investment_debate_state"].get("history", "")
-
         investment_debate_state = state["investment_debate_state"]
+        bull_initial = investment_debate_state.get("bull_initial") or investment_debate_state.get(
+            "bull_history", ""
+        )
+        bear_initial = investment_debate_state.get("bear_initial") or investment_debate_state.get(
+            "bear_history", ""
+        )
 
         # The prompt states: conflict alone is not a reason to Hold.
         prompt = render_agent_prompt(
             "managers/research_manager.txt",
             instrument_context=instrument_context,
-            history=history,
+            bull_initial=bull_initial,
+            bear_initial=bear_initial,
+            review_outcomes=investment_debate_state.get("review_outcomes", "")
+            or "No classified review outcomes were produced.",
+            final_bull_response=investment_debate_state.get("current_bull_response")
+            or bull_initial,
+            final_bear_response=investment_debate_state.get("current_bear_response")
+            or bear_initial,
             NO_EXTERNAL_TOOLS=NO_EXTERNAL_TOOLS,
         ) + get_language_instruction()
 
@@ -38,12 +49,9 @@ def create_research_manager(llm):
         )
 
         new_investment_debate_state = {
+            **investment_debate_state,
             "judge_decision": investment_plan,
-            "history": investment_debate_state.get("history", ""),
-            "bear_history": investment_debate_state.get("bear_history", ""),
-            "bull_history": investment_debate_state.get("bull_history", ""),
             "current_response": investment_plan,
-            "count": investment_debate_state["count"],
         }
 
         return {

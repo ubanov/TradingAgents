@@ -6,6 +6,16 @@ from typing_extensions import TypedDict
 
 # Researcher team state
 class InvestDebateState(TypedDict):
+    bull_initial: Annotated[str, "Bull's independent initial thesis"]
+    bear_initial: Annotated[str, "Bear's independent initial thesis"]
+    rebuttal_history: Annotated[str, "Completed cross-review rounds"]
+    review_outcomes: Annotated[str, "Classified cross-review outcomes"]
+    current_bull_response: Annotated[str, "Latest completed Bull response"]
+    current_bear_response: Annotated[str, "Latest completed Bear response"]
+    pending_bull_rebuttal: Annotated[str, "Bull response awaiting Bear's review"]
+    bull_rebuttal_count: Annotated[int, "Number of Bull cross-review calls"]
+    bear_rebuttal_count: Annotated[int, "Number of Bear cross-review calls"]
+    debate_round: Annotated[int, "Number of completed cross-review rounds"]
     bull_history: Annotated[
         str, "Bullish Conversation history"
     ]  # Bullish Conversation history

@@ -26,12 +26,20 @@ SELECTIONS = {
 }
 
 
-def test_research_depth_sets_both_rounds_without_env(monkeypatch):
+@pytest.mark.parametrize(
+    "depth,research_rounds,risk_rounds",
+    [(1, 1, 1), (3, 2, 3), (5, 3, 5)],
+)
+def test_research_depth_maps_research_and_risk_independently(
+    monkeypatch, depth, research_rounds, risk_rounds
+):
     for var in ("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "TRADINGAGENTS_MAX_RISK_ROUNDS"):
         monkeypatch.delenv(var, raising=False)
-    cfg = cli_run._build_run_config(SELECTIONS, checkpoint=None)
-    assert cfg["max_debate_rounds"] == 5
-    assert cfg["max_risk_discuss_rounds"] == 5
+    cfg = cli_run._build_run_config(
+        {**SELECTIONS, "research_depth": depth}, checkpoint=None
+    )
+    assert cfg["max_debate_rounds"] == research_rounds
+    assert cfg["max_risk_discuss_rounds"] == risk_rounds
 
 
 def test_env_round_counts_win_over_selection(monkeypatch):
@@ -42,6 +50,16 @@ def test_env_round_counts_win_over_selection(monkeypatch):
     with mock.patch.object(cli_run, "DEFAULT_CONFIG", patched):
         cfg = cli_run._build_run_config(SELECTIONS, checkpoint=None)
     assert cfg["max_debate_rounds"] == 2  # env value, not research_depth=5
+    assert cfg["max_risk_discuss_rounds"] == 4
+
+
+def test_risk_env_override_does_not_change_research_mapping(monkeypatch):
+    monkeypatch.delenv("TRADINGAGENTS_MAX_DEBATE_ROUNDS", raising=False)
+    monkeypatch.setenv("TRADINGAGENTS_MAX_RISK_ROUNDS", "4")
+    patched = dict(cli_run.DEFAULT_CONFIG, max_risk_discuss_rounds=4)
+    with mock.patch.object(cli_run, "DEFAULT_CONFIG", patched):
+        cfg = cli_run._build_run_config(SELECTIONS, checkpoint=None)
+    assert cfg["max_debate_rounds"] == 3
     assert cfg["max_risk_discuss_rounds"] == 4
 
 

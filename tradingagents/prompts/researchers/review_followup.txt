@@ -1,0 +1,10 @@
+Do not restate your full thesis.
+
+Review only claims that are newly introduced, disputed, corrected, or still unresolved in the opponent's latest response and the prior classified outcomes. Do not re-litigate a claim already marked ACCEPTED.
+
+For each material dispute, use one concise line beginning with exactly one of:
+- ACCEPTED: The opponent correctly identified an error or unsupported claim. Acknowledge the correction and stop defending the old claim.
+- REJECTED: The objection is not accepted. Explain why using concrete supplied evidence or arithmetic.
+- UNRESOLVED: The supplied evidence cannot determine which interpretation is correct.
+
+If there are no meaningful new disagreements to review, say so briefly instead of recreating the original thesis. End with a short list of the disagreements that remain genuinely unresolved.
