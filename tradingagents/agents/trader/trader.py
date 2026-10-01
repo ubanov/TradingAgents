@@ -11,6 +11,8 @@ from tradingagents.agents.context import (
     get_language_instruction,
     get_portfolio_context_from_state,
 )
+from tradingagents.agents.managers.integrity_check import render_integrity_notice_for_trader
+from tradingagents.agents.researchers.research_summary import render_trade_plan_for_trader
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.structured import (
     NO_EXTERNAL_TOOLS,
@@ -34,6 +36,12 @@ def create_trader(llm):
         # only offer it (and the grounding instruction) when it has content.
         market_report = (state["market_report"] or "").strip()
         portfolio_context = get_portfolio_context_from_state(state)
+        debate_state = state.get("investment_debate_state") or {}
+        research_trade_plan = render_trade_plan_for_trader(debate_state)
+        integrity_notice = render_integrity_notice_for_trader(
+            debate_state.get("manager_integrity_status", ""),
+            debate_state.get("manager_integrity_findings", []),
+        )
 
         if market_report:
             grounding = (
@@ -63,6 +71,8 @@ def create_trader(llm):
                     report_section=report_section,
                     portfolio_context=portfolio_context,
                     investment_plan=investment_plan,
+                    research_trade_plan=research_trade_plan,
+                    integrity_notice=integrity_notice,
                 ),
             },
         ]

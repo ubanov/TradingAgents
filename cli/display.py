@@ -15,6 +15,10 @@ from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
+from tradingagents.agents.managers.integrity_check import render_manager_integrity_report
+from tradingagents.agents.researchers.research_summary import render_research_context_summary
+from tradingagents.agents.researchers.verification import render_verification_history
+from tradingagents.agents.schemas import render_risk_stance_summary
 from tradingagents.graph.analyst_execution import (
     ANALYST_NODE_SPECS,
     AnalystExecutionPlan,
@@ -26,7 +30,12 @@ console = Console()
 class MessageBuffer:
     # Fixed teams that always run (not user-selectable)
     FIXED_AGENTS = {
-        "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
+        "Research Team": [
+            "Bull Researcher",
+            "Bear Researcher",
+            "Research Verifier",
+            "Research Manager",
+        ],
         "Trading Team": ["Trader"],
         "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
         "Portfolio Management": ["Portfolio Manager"],
@@ -400,12 +409,35 @@ def display_complete_report(final_state):
     if final_state.get("investment_debate_state"):
         debate = final_state["investment_debate_state"]
         research = []
+        if debate.get("bull_thesis") or debate.get("bear_thesis") or debate.get("setup_tags"):
+            research.append(("Research Context", render_research_context_summary(debate)))
         if debate.get("bull_history"):
             research.append(("Bull Researcher", debate["bull_history"]))
         if debate.get("bear_history"):
             research.append(("Bear Researcher", debate["bear_history"]))
+        if debate.get("verification_history"):
+            research.append(
+                (
+                    "Research Verification",
+                    render_verification_history(
+                        debate["verification_history"],
+                        repaired_agents=debate.get("repaired_agents", []),
+                        include_details=False,
+                    ),
+                )
+            )
         if debate.get("judge_decision"):
             research.append(("Research Manager", debate["judge_decision"]))
+        if debate.get("manager_integrity_status"):
+            research.append(
+                (
+                    "Research Manager Integrity",
+                    render_manager_integrity_report(
+                        debate["manager_integrity_status"],
+                        debate.get("manager_integrity_findings", []),
+                    ),
+                )
+            )
         if research:
             console.print(Panel("[bold]II. Research Team Decision[/bold]", border_style="magenta"))
             for title, content in research:
@@ -420,6 +452,8 @@ def display_complete_report(final_state):
     if final_state.get("risk_debate_state"):
         risk = final_state["risk_debate_state"]
         risk_reports = []
+        if any(risk.get(k) for k in ("aggressive_risk_level", "conservative_risk_level", "neutral_risk_level")):
+            risk_reports.append(("Risk Stance Summary", render_risk_stance_summary(risk)))
         if risk.get("aggressive_history"):
             risk_reports.append(("Aggressive Analyst", risk["aggressive_history"]))
         if risk.get("conservative_history"):
@@ -439,7 +473,12 @@ def display_complete_report(final_state):
 
 def update_research_team_status(status):
     """Update status for research team members (not Trader)."""
-    research_team = ["Bull Researcher", "Bear Researcher", "Research Manager"]
+    research_team = [
+        "Bull Researcher",
+        "Bear Researcher",
+        "Research Verifier",
+        "Research Manager",
+    ]
     for agent in research_team:
         message_buffer.update_agent_status(agent, status)
 

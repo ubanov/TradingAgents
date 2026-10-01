@@ -22,6 +22,7 @@ from tradingagents.agents.schemas import (
     ResearchPlan,
     SentimentBand,
     SentimentReport,
+    SentimentScoreSource,
     TraderAction,
     TraderProposal,
     render_research_plan,
@@ -266,6 +267,71 @@ class TestTraderAgent:
         assert "Ground concrete price levels" not in text
         assert "Proposed Investment Plan" in text  # still present
 
+    def test_prompt_includes_research_teams_deterministic_trade_plan(self):
+        captured = {}
+        state = _make_trader_state()
+        state["investment_debate_state"] = {
+            "research_horizon": "5-10 trading sessions",
+            "bull_thesis": {
+                "direction": "BULL",
+                "entry": {"type": "point", "price": 189.5},
+                "take_profit": 210.0,
+                "stop_loss": 178.0,
+                "suggested_risk_unit": "MEDIUM",
+            },
+            "bull_trade_metrics": {"reward_risk": 1.78, "stop_atr": 2.74},
+            "bear_thesis": {},
+        }
+        create_trader(_structured_trader_llm(captured))(state)
+        user = " ".join(m["content"] for m in captured["prompt"] if m["role"] == "user")
+        assert "5-10 trading sessions" in user
+        assert "Entry: 189.5" in user
+        assert "Take Profit: 210.0" in user
+        assert "Stop Loss: 178.0" in user
+        assert "Reward/Risk: 1.78" in user
+        assert "MEDIUM" in user
+        system = " ".join(m["content"] for m in captured["prompt"] if m["role"] == "system")
+        assert "prefer those levels over inventing your own" in system
+
+    def test_unsupported_manager_claim_reaches_trader_marked_unsupported_not_silently(self):
+        """#8 integrity-check spec: an unsupported manager-generated threshold
+        must still reach the Trader (option B: not silently rewritten), but
+        explicitly flagged as unsupported, never as if it were verified input."""
+        captured = {}
+        state = _make_trader_state()
+        state["investment_debate_state"] = {
+            "manager_integrity_status": "WARN",
+            "manager_integrity_findings": [
+                {
+                    "category": "NEW_UNSUPPORTED_THRESHOLD",
+                    "detail": "Only act once the MACD histogram exceeds +0.5.",
+                }
+            ],
+        }
+        create_trader(_structured_trader_llm(captured))(state)
+        user = " ".join(m["content"] for m in captured["prompt"] if m["role"] == "user")
+        assert "MACD histogram exceeds +0.5" in user
+        assert "UNSUPPORTED" in user
+        assert "do not act on these specific thresholds as if they" in user
+
+    def test_pm_status_omits_the_notice_entirely(self):
+        captured = {}
+        state = _make_trader_state()
+        state["investment_debate_state"] = {
+            "manager_integrity_status": "PASS",
+            "manager_integrity_findings": [],
+        }
+        create_trader(_structured_trader_llm(captured))(state)
+        user = " ".join(m["content"] for m in captured["prompt"] if m["role"] == "user")
+        assert "UNSUPPORTED" not in user
+
+    def test_prompt_degrades_gracefully_with_no_structured_research_state(self):
+        # No investment_debate_state at all (e.g. a bare programmatic state).
+        captured = {}
+        create_trader(_structured_trader_llm(captured))(_make_trader_state())
+        user = " ".join(m["content"] for m in captured["prompt"] if m["role"] == "user")
+        assert "No structured research trade plan is available" in user
+
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
             "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
@@ -402,6 +468,65 @@ class TestRenderSentimentReport:
                 overall_band=SentimentBand.BULLISH, overall_score=11.0,
                 confidence="high", narrative="n",
             )
+
+    def test_recovers_band_key_instead_of_overall_band(self):
+        """Regression (batch run 2026-10-01): a weaker model wrote 'band'
+        instead of 'overall_band' and omitted overall_score entirely."""
+        report = SentimentReport.model_validate(
+            {"band": "Mildly Bullish", "confidence": "medium", "narrative": "n"}
+        )
+        assert report.overall_band is SentimentBand.MILDLY_BULLISH
+        assert report.overall_score == 6.0  # band midpoint, not invented
+
+    def test_does_not_override_an_explicitly_provided_score(self):
+        report = SentimentReport.model_validate(
+            {"band": "Bullish", "overall_score": 9.5, "confidence": "high", "narrative": "n"}
+        )
+        assert report.overall_score == 9.5
+
+    def test_zero_score_from_the_model_survives_unchanged(self):
+        """Regression: `if not data.get("overall_score")` treated a genuine
+        0 (maximally bearish) as missing and silently overwrote it with the
+        band midpoint."""
+        report = SentimentReport.model_validate(
+            {
+                "overall_band": "Bearish",
+                "overall_score": 0,
+                "confidence": "high",
+                "narrative": "n",
+            }
+        )
+        assert report.overall_score == 0
+        assert report.score_source is SentimentScoreSource.MODEL
+
+    def test_model_provided_score_is_marked_as_model_source(self):
+        report = SentimentReport(
+            overall_band=SentimentBand.BULLISH, overall_score=7.2,
+            confidence="high", narrative="n",
+        )
+        assert report.score_source is SentimentScoreSource.MODEL
+
+    def test_band_midpoint_inferred_score_is_marked_as_inferred(self):
+        report = SentimentReport.model_validate(
+            {"band": "Mildly Bullish", "confidence": "medium", "narrative": "n"}
+        )
+        assert report.overall_score == 6.0
+        assert report.score_source is SentimentScoreSource.INFERRED_FROM_BAND
+
+    def test_score_source_cannot_be_spoofed_by_the_model(self):
+        """The model trying to claim INFERRED_FROM_BAND for a score it did
+        provide itself must not be believed -- this field is always derived
+        in code, never trusted from the call, like ConvictionScore.total."""
+        report = SentimentReport.model_validate(
+            {
+                "overall_band": "Bullish",
+                "overall_score": 7.0,
+                "score_source": "INFERRED_FROM_BAND",
+                "confidence": "high",
+                "narrative": "n",
+            }
+        )
+        assert report.score_source is SentimentScoreSource.MODEL
 
 
 def _make_sentiment_state():

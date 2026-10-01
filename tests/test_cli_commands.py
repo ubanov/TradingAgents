@@ -6,6 +6,9 @@ has to stay the default action while a second command exists alongside it.
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -120,6 +123,90 @@ def test_backtest_rejects_input_that_would_sweep_nothing(runner, args, expected)
     result = runner.invoke(m.app, args)
     assert result.exit_code == 1
     assert expected in result.output.lower()
+
+
+@pytest.mark.unit
+def test_batch_requires_only_tickers(runner, monkeypatch, tmp_path):
+    """--date/--analysts/--depth/--language/--output-dir are all optional now;
+    only --tickers (or --tickers-file) must be given."""
+    captured = {}
+
+    def _fake_batch(**kwargs):
+        captured.update(kwargs)
+        return [], tmp_path / "summary.md", tmp_path / "summary.json"
+
+    monkeypatch.setattr(m, "run_batch_analysis", _fake_batch)
+    monkeypatch.delenv("TRADINGAGENTS_ANALYSTS", raising=False)
+    monkeypatch.delenv("TRADINGAGENTS_DEPTH", raising=False)
+    monkeypatch.delenv("TRADINGAGENTS_OUTPUT_LANGUAGE", raising=False)
+
+    result = runner.invoke(m.app, ["batch", "--tickers", "NVDA"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["tickers"] == ["NVDA"]
+    assert captured["analysts"] == ["market", "social", "news", "fundamentals"]
+    assert captured["depth_name"] == "medium"
+    assert captured["depth_value"] == 3
+    assert captured["language"] == "English"
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert captured["analysis_date"] == today
+    assert captured["output_dir"] == Path("test") / today
+
+
+@pytest.mark.unit
+def test_batch_without_tickers_or_tickers_file_fails_cleanly(runner):
+    result = runner.invoke(m.app, ["batch"])
+    assert result.exit_code == 1
+    assert "ticker" in result.output.lower()
+
+
+@pytest.mark.unit
+def test_batch_env_vars_supply_analysts_and_depth_when_flags_are_omitted(runner, monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake_batch(**kwargs):
+        captured.update(kwargs)
+        return [], tmp_path / "summary.md", tmp_path / "summary.json"
+
+    monkeypatch.setattr(m, "run_batch_analysis", _fake_batch)
+    monkeypatch.setenv("TRADINGAGENTS_ANALYSTS", "market,news")
+    monkeypatch.setenv("TRADINGAGENTS_DEPTH", "deep")
+    monkeypatch.setenv("TRADINGAGENTS_OUTPUT_LANGUAGE", "French")
+
+    result = runner.invoke(m.app, ["batch", "--tickers", "NVDA"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["analysts"] == ["market", "news"]
+    assert captured["depth_name"] == "deep"
+    assert captured["depth_value"] == 5
+    assert captured["language"] == "French"
+
+
+@pytest.mark.unit
+def test_batch_explicit_flags_win_over_env_vars_and_defaults(runner, monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake_batch(**kwargs):
+        captured.update(kwargs)
+        return [], tmp_path / "summary.md", tmp_path / "summary.json"
+
+    monkeypatch.setattr(m, "run_batch_analysis", _fake_batch)
+    monkeypatch.setenv("TRADINGAGENTS_ANALYSTS", "market,news")
+    monkeypatch.setenv("TRADINGAGENTS_DEPTH", "deep")
+
+    result = runner.invoke(m.app, [
+        "batch", "--tickers", "NVDA",
+        "--analysts", "fundamentals", "--depth", "shallow",
+        "--date", "2026-01-15", "--language", "Spanish",
+        "--output-dir", str(tmp_path / "custom"),
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert captured["analysts"] == ["fundamentals"]
+    assert captured["depth_name"] == "shallow"
+    assert captured["language"] == "Spanish"
+    assert captured["analysis_date"] == "2026-01-15"
+    assert captured["output_dir"] == tmp_path / "custom"
 
 
 @pytest.mark.unit

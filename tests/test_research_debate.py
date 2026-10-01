@@ -128,6 +128,32 @@ def test_reviews_use_only_the_previous_completed_phase_or_round():
 
 
 @pytest.mark.unit
+def test_bull_and_bear_review_prompts_are_collaborative_but_distinct():
+    state = _state()
+    bull_llm = _ResearchLLM("BULL")
+    bear_llm = _ResearchLLM("BEAR")
+    bull = create_bull_researcher(bull_llm)
+    bear = create_bear_researcher(bear_llm)
+    _run_initial_phase(state, bull_llm, bear_llm)
+
+    _apply(state, bull)
+    _apply(state, bear)
+
+    for prompt in (bull_llm.prompts[1], bear_llm.prompts[1]):
+        assert "complementary researchers" in prompt
+        assert "You are not trying to win" in prompt
+        assert "Changing your mind is not losing" in prompt
+        assert "lowering conviction after valid counterevidence" in prompt
+        assert "Do not defend a weak claim" in prompt
+        assert "genuinely unresolved" in prompt
+        assert "unrelated mistake" in prompt
+        assert "What did the other researcher identify" in prompt
+
+    assert "bullish-perspective member" in bull_llm.prompts[1]
+    assert "bearish/reduce-risk-perspective member" in bear_llm.prompts[1]
+
+
+@pytest.mark.unit
 def test_research_manager_receives_initial_theses_and_rebuttal_history():
     state = _state()
     bull_llm = _ResearchLLM("BULL")
@@ -142,6 +168,10 @@ def test_research_manager_receives_initial_theses_and_rebuttal_history():
     for marker in ("BULL_1", "BEAR_1", "BULL_2", "BEAR_2"):
         assert marker in prompt
     assert prompt.index("BULL_1") < prompt.index("BEAR_1") < prompt.index("BULL_2")
+    assert "complementary research roles" in prompt
+    assert "reduced conviction after valid counterevidence" in prompt
+    assert "unresolved disagreements as useful information" in prompt
+    assert "not which side argued more aggressively" in prompt
 
 
 @pytest.mark.unit
@@ -185,7 +215,7 @@ def test_configured_value_is_the_number_of_cross_review_rounds(rounds):
     logic = ConditionalLogic(max_debate_rounds=rounds)
     target = "Bull Researcher"
 
-    while target != "Research Manager":
+    while target != "Research Verifier":
         _apply(state, nodes[target])
         target = logic.should_continue_debate(state)
 

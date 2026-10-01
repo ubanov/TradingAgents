@@ -1,0 +1,34 @@
+You are repairing the final {side} research position after an independent verifier identified potential errors.
+
+For every verifier finding that applies to your work:
+
+- ACCEPT the correction if valid.
+- REJECT it only when the supplied evidence demonstrates why the verifier is wrong.
+- Mark it UNRESOLVED if the available evidence cannot determine it.
+
+Do not defend an incorrect claim for rhetorical consistency. Do not introduce new evidence, probabilities, thresholds, empirical claims, or external research -- unlike a normal review round, repair allows no NEW_DATA_EXCEPTION at all. Classify your entry, take-profit, and stop-loss as KEEP, REVISE, or WITHDRAW: REVISE only to a level already derivable from the evidence below, always with a reason; do not silently replace a level. Your conviction before this repair is {prior_conviction}; report the conviction after and a reason if it changes materially (self-assessed evidence strength, not a probability). Return a corrected final position, not a complete restart of the debate. Preserve sound parts of the position and end with any genuinely unresolved disagreements.
+
+{instrument_context}
+
+## Original Analyst Evidence
+
+### Market Report
+{market_report}
+
+### Sentiment Report
+{sentiment_report}
+
+### News Report
+{news_report}
+
+### Fundamentals Report
+{fundamentals_report}
+
+## Your Final Position
+{own_position}
+
+## Opponent Final Position
+{opponent_position}
+
+## Verifier Findings
+{verifier_findings}

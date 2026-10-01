@@ -9,9 +9,31 @@ run produces the same on-disk report tree a CLI run does.
 from datetime import datetime
 from pathlib import Path
 
+from tradingagents.agents.managers.integrity_check import render_manager_integrity_report
+from tradingagents.agents.researchers.research_summary import render_research_context_summary
+from tradingagents.agents.researchers.verification import render_verification_history
+from tradingagents.agents.schemas import render_risk_stance_summary
 
-def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
-    """Save a completed run's reports to ``save_path``; return the complete-report path."""
+
+def write_report_tree(
+    final_state: dict,
+    ticker: str,
+    save_path,
+    *,
+    error_banner: str | None = None,
+    output_filename: str = "complete_report.md",
+) -> Path:
+    """Save a run's reports to ``save_path``; return the combined-report path.
+
+    Every section below is already independently conditional on the matching
+    piece of ``final_state`` being present, so this degrades gracefully to a
+    partial report for a run that failed partway through -- pass
+    ``error_banner`` to prepend an explicit, unmissable notice that the run
+    did not reach a valid final decision (never silently present a partial
+    result as if it were a successful one), and ``output_filename`` to save
+    it under a distinct name (e.g. ``partial_report.md``) instead of
+    overwriting a prior successful ``complete_report.md`` for the same ticker.
+    """
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
@@ -44,6 +66,11 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
         research_dir = save_path / "2_research"
         debate = final_state["investment_debate_state"]
         research_parts = []
+        if debate.get("bull_thesis") or debate.get("bear_thesis") or debate.get("setup_tags"):
+            research_dir.mkdir(exist_ok=True)
+            context_summary = render_research_context_summary(debate)
+            (research_dir / "context.md").write_text(context_summary, encoding="utf-8")
+            research_parts.append(("Research Context", context_summary))
         if debate.get("bull_history"):
             research_dir.mkdir(exist_ok=True)
             (research_dir / "bull.md").write_text(debate["bull_history"], encoding="utf-8")
@@ -52,10 +79,33 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
             research_dir.mkdir(exist_ok=True)
             (research_dir / "bear.md").write_text(debate["bear_history"], encoding="utf-8")
             research_parts.append(("Bear Researcher", debate["bear_history"]))
+        if debate.get("verification_history"):
+            research_dir.mkdir(exist_ok=True)
+            verification_detail = render_verification_history(
+                debate["verification_history"],
+                repaired_agents=debate.get("repaired_agents", []),
+                include_details=True,
+            )
+            (research_dir / "verification.md").write_text(
+                verification_detail, encoding="utf-8"
+            )
+            verification_summary = render_verification_history(
+                debate["verification_history"],
+                repaired_agents=debate.get("repaired_agents", []),
+                include_details=False,
+            )
+            research_parts.append(("Research Verification", verification_summary))
         if debate.get("judge_decision"):
             research_dir.mkdir(exist_ok=True)
             (research_dir / "manager.md").write_text(debate["judge_decision"], encoding="utf-8")
             research_parts.append(("Research Manager", debate["judge_decision"]))
+        if debate.get("manager_integrity_status"):
+            integrity_report = render_manager_integrity_report(
+                debate["manager_integrity_status"], debate.get("manager_integrity_findings", [])
+            )
+            research_dir.mkdir(exist_ok=True)
+            (research_dir / "manager_integrity.md").write_text(integrity_report, encoding="utf-8")
+            research_parts.append(("Research Manager Integrity", integrity_report))
         if research_parts:
             content = "\n\n".join(f"### {name}\n{text}" for name, text in research_parts)
             sections.append(f"## II. Research Team Decision\n\n{content}")
@@ -72,6 +122,8 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
         risk_dir = save_path / "4_risk"
         risk = final_state["risk_debate_state"]
         risk_parts = []
+        if any(risk.get(k) for k in ("aggressive_risk_level", "conservative_risk_level", "neutral_risk_level")):
+            risk_parts.append(("Risk Stance Summary", render_risk_stance_summary(risk)))
         if risk.get("aggressive_history"):
             risk_dir.mkdir(exist_ok=True)
             (risk_dir / "aggressive.md").write_text(risk["aggressive_history"], encoding="utf-8")
@@ -97,5 +149,10 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
-    return save_path / "complete_report.md"
+    if error_banner:
+        header += (
+            "> **INCOMPLETE RUN -- NOT A FINAL RECOMMENDATION**\n"
+            f"> {error_banner}\n\n"
+        )
+    (save_path / output_filename).write_text(header + "\n\n".join(sections), encoding="utf-8")
+    return save_path / output_filename

@@ -13,8 +13,9 @@ import os
 from datetime import datetime, timedelta
 
 import pytz
+import requests
 
-from tradingagents.dataflows.errors import VendorNotConfiguredError
+from tradingagents.dataflows.errors import VendorNotConfiguredError, VendorRateLimitError
 from tradingagents.dataflows.net import get_scrubbed
 
 logger = logging.getLogger(__name__)
@@ -135,13 +136,22 @@ def _fred_today() -> str:
 def _request(path: str, params: dict) -> dict:
     """GET a FRED endpoint, surfacing FRED's JSON error body on a bad request."""
     api_key = get_api_key()
-    response = get_scrubbed(
-        f"{FRED_API_BASE}/{path}",
-        params={**params, "api_key": api_key, "file_type": "json"},
-        timeout=REQUEST_TIMEOUT,
-        secret=api_key,
-        passthrough=(400,),
-    )
+    try:
+        response = get_scrubbed(
+            f"{FRED_API_BASE}/{path}",
+            params={**params, "api_key": api_key, "file_type": "json"},
+            timeout=REQUEST_TIMEOUT,
+            secret=api_key,
+            passthrough=(400,),
+        )
+    except requests.HTTPError as exc:
+        # A throttle (429) or FRED-side outage (5xx) is a "try another vendor /
+        # try later" condition, not "this indicator is broken" -- classify it
+        # like every other vendor does so the router's degrade path applies
+        # instead of surfacing a generic HTTPError. get_scrubbed already
+        # stripped the API key from the message and detached response/request,
+        # so nothing further needs scrubbing here.
+        raise VendorRateLimitError(f"FRED request failed: {exc}") from exc
     # FRED returns 400 with a JSON {"error_message": ...} for unknown series IDs
     # or malformed params; turn that into a clear, actionable error.
     if response.status_code == 400:

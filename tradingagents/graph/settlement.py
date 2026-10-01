@@ -66,6 +66,17 @@ def fetch_returns(
         if len(stock) <= holding_days or len(bench) <= holding_days:
             return None, None, None, None
 
+        # A zero opening print (bad vendor tick, halted/delisted name) would
+        # otherwise silently divide to inf/nan: numpy doesn't raise, so the
+        # bad figure would flow straight into the memory log and corrupt any
+        # aggregate (e.g. backtest mean alpha) that later averages over it.
+        if stock.iloc[0] == 0 or bench.iloc[0] == 0:
+            logger.warning(
+                "Zero opening price for %s or %s on %s (will retry next run)",
+                ticker, benchmark, trade_date,
+            )
+            return None, None, None, None
+
         raw = float((stock.iloc[holding_days] - stock.iloc[0]) / stock.iloc[0])
         bench_ret = float((bench.iloc[holding_days] - bench.iloc[0]) / bench.iloc[0])
         alpha = raw - bench_ret

@@ -18,10 +18,11 @@ so that:
 
 from __future__ import annotations
 
+import json
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
@@ -58,6 +59,35 @@ def _coerce_optional_float(value):
         return None
 
 
+def _coerce_str_list(value) -> list:
+    """Normalise an LLM-written list field before validation.
+
+    A weak structured-output call sometimes serializes a list field as a
+    single JSON-encoded string (e.g. ``'["a", "b"]'``) instead of a native
+    array. Pydantic's bare ``list[str]`` type otherwise rejects that outright
+    (``list_type`` error), discarding every other field the model got right
+    along with it -- observed in practice for ``InitialResearchThesis.risks``/
+    ``data_gaps`` in a real batch run. ``None`` becomes an empty list, a
+    genuine list passes through, a JSON-array-shaped string is parsed, and
+    anything else (a plain string, a number) is wrapped as a single item.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("[") and text.endswith("]"):
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+        return [value] if value else []
+    return [value]
+
+
 # ---------------------------------------------------------------------------
 # Shared rating types
 # ---------------------------------------------------------------------------
@@ -85,6 +115,483 @@ class TraderAction(str, Enum):
     BUY = "Buy"
     HOLD = "Hold"
     SELL = "Sell"
+
+
+# ---------------------------------------------------------------------------
+# Research Verifier
+# ---------------------------------------------------------------------------
+
+
+class VerificationStatus(str, Enum):
+    PASS = "PASS"
+    WARN = "WARN"
+    FAIL = "FAIL"
+
+
+class FindingCategory(str, Enum):
+    ARITHMETIC_ERROR = "ARITHMETIC_ERROR"
+    UNIT_ERROR = "UNIT_ERROR"
+    UNSUPPORTED_CLAIM = "UNSUPPORTED_CLAIM"
+    SOURCE_MISMATCH = "SOURCE_MISMATCH"
+    CONTRADICTION = "CONTRADICTION"
+    OVERSTATED_INFERENCE = "OVERSTATED_INFERENCE"
+
+
+class FindingSeverity(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class ArithmeticOperation(str, Enum):
+    ADD = "add"
+    SUBTRACT = "subtract"
+    MULTIPLY = "multiply"
+    DIVIDE = "divide"
+    RATIO = "ratio"
+    PERCENTAGE = "percentage"
+    PERCENTAGE_CHANGE = "percentage_change"
+
+
+class ArithmeticClaim(BaseModel):
+    """A simple explicit calculation extracted for deterministic checking."""
+
+    operation: ArithmeticOperation
+    operands: list[float] = Field(
+        description="Operands in calculation order, using only supplied evidence."
+    )
+    reported_result: float
+
+
+class VerificationFinding(BaseModel):
+    category: FindingCategory
+    severity: FindingSeverity
+    agent: str = Field(
+        default="unknown_research_output",
+        description="Research output containing the claim, such as bull_review_2."
+    )
+    claim: str
+    evidence: str = ""
+    correction: str = ""
+    reason: str = ""
+    arithmetic: list[ArithmeticClaim] = Field(
+        default_factory=list,
+        description=(
+            "Machine-checkable arithmetic checks when the finding concerns "
+            "explicit supported calculations; otherwise an empty list."
+        ),
+    )
+
+    @field_validator("arithmetic", mode="before")
+    @classmethod
+    def _normalise_arithmetic(cls, value):
+        if value is None:
+            return []
+        return value if isinstance(value, list) else [value]
+
+
+class ResearchVerification(BaseModel):
+    """Quality-control result for the completed Bull/Bear research debate."""
+
+    status: VerificationStatus
+    findings: list[VerificationFinding] = Field(default_factory=list)
+    verified_points: list[str] = Field(default_factory=list)
+    repair_required: bool = False
+    repair_targets: list[Literal["bull", "bear"]] = Field(default_factory=list)
+    notes: str = ""
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalise_status(cls, value):
+        return value.upper() if isinstance(value, str) else value
+
+    @field_validator("findings", mode="before")
+    @classmethod
+    def _normalise_findings(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            return [value]
+        return value
+
+    @field_validator("verified_points", mode="before")
+    @classmethod
+    def _normalise_verified_points(cls, value):
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        return [_verification_text(item) for item in values]
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _normalise_notes(cls, value):
+        if value is None:
+            return ""
+        values = value if isinstance(value, list) else [value]
+        return "\n".join(_verification_text(item) for item in values)
+
+    @field_validator("repair_targets", mode="before")
+    @classmethod
+    def _normalise_repair_targets(cls, value):
+        values = value if isinstance(value, list) else ([value] if value else [])
+        targets = []
+        for item in values:
+            text = str(item).lower()
+            for target in ("bull", "bear"):
+                if target in text and target not in targets:
+                    targets.append(target)
+        return targets
+
+
+def _verification_text(value) -> str:
+    """Render a loose model-produced note/verified point as compact text."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        preferred = [
+            str(value[key]).strip()
+            for key in ("claim", "evidence", "reason", "calculation", "correction")
+            if value.get(key) not in (None, "")
+        ]
+        if preferred:
+            return " | ".join(preferred)
+    return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Bull/Bear structured trade hypothesis and collaborative review
+# ---------------------------------------------------------------------------
+#
+# Bull and Bear each commit to a structured trade hypothesis at the start of
+# the debate (InitialResearchThesis), then use ResearchReviewOutcome during
+# cross-review to KEEP/REVISE/WITHDRAW its levels and track how conviction
+# evolved. See the fork README ("Structured trade hypotheses", "Conviction
+# semantics") for the behavioral rules these schemas encode.
+
+
+class ResearchDirection(str, Enum):
+    BULL = "BULL"
+    BEAR = "BEAR"
+
+
+class SuggestedRiskUnit(str, Enum):
+    """A research-level signal of how much risk a thesis appears to justify.
+
+    NOT a portfolio percentage, leverage, or position size -- see
+    ``suggested_risk_unit_for`` and the fork README.
+    """
+
+    NO_TRADE = "NO_TRADE"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+def suggested_risk_unit_for(conviction_total: int) -> SuggestedRiskUnit:
+    """Deterministic, documented conviction -> suggested-risk-unit mapping.
+
+    Conservative default: <50 NO_TRADE, 50-64 LOW, 65-79 MEDIUM, 80+ HIGH.
+    Computed here rather than by the LLM so it can never drift from the
+    conviction score it is derived from.
+    """
+    if conviction_total < 50:
+        return SuggestedRiskUnit.NO_TRADE
+    if conviction_total < 65:
+        return SuggestedRiskUnit.LOW
+    if conviction_total < 80:
+        return SuggestedRiskUnit.MEDIUM
+    return SuggestedRiskUnit.HIGH
+
+
+class ConvictionScore(BaseModel):
+    """Self-assessed evidence-strength score, 0-25 per component, 0-100 total.
+
+    CRITICAL: this is NOT a calibrated probability that the market outcome
+    will occur. It answers "how strongly does the supplied evidence support
+    this researcher's own thesis?", nothing more.
+    """
+
+    evidence_quality: int = Field(
+        ge=0, le=25,
+        description="0-25: quality, specificity, and relevance of the supporting evidence.",
+    )
+    internal_consistency: int = Field(
+        ge=0, le=25,
+        description="0-25: the thesis does not contradict itself or the supplied evidence.",
+    )
+    robustness_to_challenge: int = Field(
+        ge=0, le=25,
+        description="0-25: how well the thesis withstands the strongest counterarguments seen so far.",
+    )
+    trade_plan_coherence: int = Field(
+        ge=0, le=25,
+        description="0-25: entry/target/stop/horizon form one internally consistent plan.",
+    )
+    total: int = Field(
+        default=0, ge=0, le=100,
+        description=(
+            "Do not set this yourself: it is always recomputed as the sum of "
+            "the four components above."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _derive_total(self):
+        # Recomputed unconditionally so a model's arithmetic mistake here can
+        # never desynchronize the total from its components (test: "Conviction
+        # total is consistent with component scores").
+        self.total = (
+            self.evidence_quality
+            + self.internal_consistency
+            + self.robustness_to_challenge
+            + self.trade_plan_coherence
+        )
+        return self
+
+
+class EntryLevelType(str, Enum):
+    POINT = "point"
+    RANGE = "range"
+
+
+class EntryLevel(BaseModel):
+    """A committed entry hypothesis: either one price or a low/high range.
+
+    Reviews and deterministic trade-metric calculations use the midpoint of a
+    range as the single reference entry (documented default rule); see
+    ``reference``.
+    """
+
+    type: EntryLevelType
+    price: float | None = Field(default=None, description="Required when type is 'point'.")
+    low: float | None = Field(default=None, description="Required when type is 'range'.")
+    high: float | None = Field(default=None, description="Required when type is 'range'.")
+
+    @field_validator("price", "low", "high", mode="before")
+    @classmethod
+    def _nullish_float_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+    @property
+    def reference(self) -> float | None:
+        if self.type is EntryLevelType.POINT:
+            return self.price
+        if self.low is not None and self.high is not None:
+            return (self.low + self.high) / 2
+        return self.low if self.low is not None else self.high
+
+
+class InitialResearchThesis(BaseModel):
+    """Structured Bull/Bear initial trade hypothesis.
+
+    Produced once per side at the start of the debate, independently of the
+    other side. Later review rounds may KEEP/REVISE/WITHDRAW its entry/
+    take_profit/stop_loss fields (see ``ResearchReviewOutcome``) but must not
+    replace it with a materially different thesis built on new evidence.
+    """
+
+    direction: ResearchDirection
+    conviction: ConvictionScore
+    horizon: str = Field(
+        description="Must match the shared research horizon supplied in the prompt."
+    )
+    entry: EntryLevel
+    take_profit: float | None = Field(default=None)
+    stop_loss: float | None = Field(default=None)
+    thesis: str = Field(description="The primary thesis, 2-5 sentences.")
+    evidence: list[str] = Field(
+        default_factory=list, description="Key supporting evidence, from the supplied reports only."
+    )
+    risks: list[str] = Field(default_factory=list, description="Key risks to this thesis.")
+    data_gaps: list[str] = Field(
+        default_factory=list, description="Explicit gaps in the available evidence."
+    )
+    suggested_risk_unit: SuggestedRiskUnit = Field(
+        default=SuggestedRiskUnit.NO_TRADE,
+        description="Derived automatically from conviction; do not set this yourself.",
+    )
+
+    @field_validator("take_profit", "stop_loss", mode="before")
+    @classmethod
+    def _nullish_float_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+    @field_validator("evidence", "risks", "data_gaps", mode="before")
+    @classmethod
+    def _coerce_list_fields(cls, v):
+        return _coerce_str_list(v)
+
+    @model_validator(mode="after")
+    def _derive_suggested_risk_unit(self):
+        self.suggested_risk_unit = suggested_risk_unit_for(self.conviction.total)
+        return self
+
+
+def render_initial_thesis(thesis: InitialResearchThesis) -> str:
+    """Render a structured initial thesis to the markdown prose the rest of
+    the system already treats the Bull/Bear output as (debate history,
+    verifier, repair, Research Manager all read these fields as text)."""
+    entry = thesis.entry
+    if entry.type is EntryLevelType.RANGE:
+        low = entry.low if entry.low is not None else "?"
+        high = entry.high if entry.high is not None else "?"
+        entry_text = f"{low} - {high} (range)"
+    else:
+        entry_text = str(entry.price) if entry.price is not None else "not set"
+
+    lines = [
+        f"**Direction**: {thesis.direction.value}",
+        f"**Horizon**: {thesis.horizon}",
+        "",
+        "**Conviction** (self-assessed evidence-strength score, NOT a probability of the market outcome):",
+        f"- Evidence quality: {thesis.conviction.evidence_quality}/25",
+        f"- Internal consistency: {thesis.conviction.internal_consistency}/25",
+        f"- Robustness to challenge: {thesis.conviction.robustness_to_challenge}/25",
+        f"- Trade-plan coherence: {thesis.conviction.trade_plan_coherence}/25",
+        f"- Total: {thesis.conviction.total}/100",
+        "",
+        f"**Entry**: {entry_text}",
+        f"**Take Profit**: {thesis.take_profit if thesis.take_profit is not None else 'not set'}",
+        f"**Stop Loss**: {thesis.stop_loss if thesis.stop_loss is not None else 'not set'}",
+        f"**Suggested Risk Unit**: {thesis.suggested_risk_unit.value} "
+        "(research-level signal only; not a position size or portfolio percentage)",
+        "",
+        f"**Thesis**: {thesis.thesis}",
+    ]
+    if thesis.evidence:
+        lines += ["", "**Key Evidence**:"] + [f"- {item}" for item in thesis.evidence]
+    if thesis.risks:
+        lines += ["", "**Key Risks**:"] + [f"- {item}" for item in thesis.risks]
+    if thesis.data_gaps:
+        lines += ["", "**Data Gaps**:"] + [f"- {item}" for item in thesis.data_gaps]
+    return "\n".join(lines)
+
+
+class TradePlanAction(str, Enum):
+    KEEP = "KEEP"
+    REVISE = "REVISE"
+    WITHDRAW = "WITHDRAW"
+
+
+class TradePlanFieldChange(BaseModel):
+    action: TradePlanAction = TradePlanAction.KEEP
+    old: float | None = None
+    new: float | None = None
+    reason: str = Field(
+        default="",
+        description="Required for REVISE/WITHDRAW: why, using only already-supplied evidence.",
+    )
+
+    @field_validator("old", "new", mode="before")
+    @classmethod
+    def _nullish_float_to_none(cls, v):
+        return _coerce_optional_float(v)
+
+
+class TradePlanChanges(BaseModel):
+    entry: TradePlanFieldChange = Field(default_factory=TradePlanFieldChange)
+    take_profit: TradePlanFieldChange = Field(default_factory=TradePlanFieldChange)
+    stop_loss: TradePlanFieldChange = Field(default_factory=TradePlanFieldChange)
+
+
+class NewDataException(BaseModel):
+    """A narrow, explicit exception to the "no new data in reviews" rule.
+
+    Reserved for when a new datum is genuinely necessary to correct a
+    material factual misunderstanding; see the fork README.
+    """
+
+    datum: str
+    reason: str
+    source: str = ""
+
+
+class ResearchReviewOutcome(BaseModel):
+    """Structured Bull/Bear cross-review output for one round.
+
+    Normal reviews defend, refute, correct, accept, or withdraw claims
+    already present in the initial theses; they must not introduce new
+    market facts, sources, targets, thresholds, or catalysts except through
+    an explicit, justified ``new_data_exceptions`` entry.
+    """
+
+    accepted: list[str] = Field(default_factory=list)
+    rejected: list[str] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+    arithmetic_corrections: list[str] = Field(default_factory=list)
+    trade_plan_changes: TradePlanChanges = Field(default_factory=TradePlanChanges)
+    conviction_before: int = Field(ge=0, le=100)
+    conviction_after: int = Field(ge=0, le=100)
+    conviction_reason: str = Field(
+        default="",
+        description="Required when conviction changes materially: the evidence that changed it.",
+    )
+    new_data_exceptions: list[NewDataException] = Field(default_factory=list)
+    remaining_disagreements: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "accepted", "rejected", "unresolved", "arithmetic_corrections", "remaining_disagreements",
+        mode="before",
+    )
+    @classmethod
+    def _normalise_text_list(cls, value):
+        return [_verification_text(item) for item in _coerce_str_list(value)]
+
+    @field_validator("new_data_exceptions", mode="before")
+    @classmethod
+    def _normalise_new_data_exceptions(cls, value):
+        return _coerce_str_list(value)
+
+
+def render_review_outcome(outcome: ResearchReviewOutcome) -> str:
+    """Render a structured review to markdown, preserving the ACCEPTED/
+    REJECTED/UNRESOLVED line format the debate history already parses
+    (``researchers/review_outcomes.py:extract_review_outcomes``)."""
+    lines: list[str] = []
+    for item in outcome.accepted:
+        lines.append(f"ACCEPTED: {item}")
+    for item in outcome.rejected:
+        lines.append(f"REJECTED: {item}")
+    for item in outcome.unresolved:
+        lines.append(f"UNRESOLVED: {item}")
+    if not (outcome.accepted or outcome.rejected or outcome.unresolved):
+        lines.append("No material disagreements to classify this round.")
+
+    if outcome.arithmetic_corrections:
+        lines += ["", "**Arithmetic Corrections**:"]
+        lines += [f"- {item}" for item in outcome.arithmetic_corrections]
+
+    lines += ["", "**Trade Plan Changes**:"]
+    for label, change in (
+        ("Entry", outcome.trade_plan_changes.entry),
+        ("Take Profit", outcome.trade_plan_changes.take_profit),
+        ("Stop Loss", outcome.trade_plan_changes.stop_loss),
+    ):
+        detail = f"- {label}: {change.action.value}"
+        if change.action is TradePlanAction.REVISE:
+            detail += f" ({change.old} -> {change.new})"
+        if change.reason:
+            detail += f" Reason: {change.reason}"
+        lines.append(detail)
+
+    lines += [
+        "",
+        f"**Conviction**: {outcome.conviction_before} -> {outcome.conviction_after} "
+        "(self-assessed evidence strength, not a probability)",
+    ]
+    if outcome.conviction_reason:
+        lines.append(f"Reason: {outcome.conviction_reason}")
+
+    if outcome.new_data_exceptions:
+        lines += ["", "**NEW_DATA_EXCEPTION**:"]
+        for exc in outcome.new_data_exceptions:
+            lines.append(f"- {exc.datum} -- {exc.reason} (source: {exc.source})")
+
+    if outcome.remaining_disagreements:
+        lines += ["", "**Remaining Disagreements**:"]
+        lines += [f"- {item}" for item in outcome.remaining_disagreements]
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +796,59 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Risk Management debate
+# ---------------------------------------------------------------------------
+
+
+class RiskStanceAssessment(BaseModel):
+    """Structured output for one Risk Management debator's turn.
+
+    Mirrors the Trader/Research Manager/Portfolio Manager pattern: the
+    conversational debate argument is still free prose (``argument``), but a
+    small structured signal (``risk_level``) rides alongside it instead of
+    being left implicit in the text, the way Bull/Bear conviction rides
+    alongside their prose. Falls back to free text exactly like those agents
+    when a provider does not support structured output.
+    """
+
+    risk_level: Literal["LOW", "MEDIUM", "HIGH"] = Field(
+        description=(
+            "This analyst's own assessment of how risky the TRADER's current "
+            "plan is, from their assigned perspective -- not a label for "
+            "their own archetype (an Aggressive analyst can still rate the "
+            "plan LOW if it is too timid for their taste)."
+        )
+    )
+    argument: str = Field(
+        description=(
+            "The full conversational rebuttal/argument for this turn, addressing "
+            "the other analysts' latest points directly. Speak naturally, as "
+            "instructed, with no special formatting."
+        )
+    )
+
+
+def render_risk_argument(assessment: RiskStanceAssessment) -> str:
+    """The prose argument only; ``risk_level`` is tracked separately in debate
+    state (see ``RiskDebateState``) so the transcript's shape is unchanged."""
+    return assessment.argument
+
+
+def render_risk_stance_summary(risk_debate_state: dict) -> str:
+    """Each risk debator's latest LOW/MEDIUM/HIGH read of the trader's plan,
+    for the Portfolio Manager prompt and the saved report."""
+    lines = []
+    for label, key in (
+        ("Aggressive", "aggressive_risk_level"),
+        ("Conservative", "conservative_risk_level"),
+        ("Neutral", "neutral_risk_level"),
+    ):
+        level = risk_debate_state.get(key) or "not recorded"
+        lines.append(f"- {label}: {level}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Sentiment Analyst
 # ---------------------------------------------------------------------------
 
@@ -306,6 +866,34 @@ class SentimentBand(str, Enum):
     MIXED = "Mixed"
     MILDLY_BEARISH = "Mildly Bearish"
     BEARISH = "Bearish"
+
+
+# Per-band midpoint of the guideline ranges in SentimentReport.overall_score's
+# own description, used only to recover a missing score when the band itself
+# was supplied -- never to override a score the model did provide.
+_SENTIMENT_BAND_SCORE_MIDPOINT = {
+    "bullish": 8.0,
+    "mildly bullish": 6.0,
+    "neutral": 5.0,
+    "mixed": 5.0,
+    "mildly bearish": 4.0,
+    "bearish": 2.0,
+}
+
+
+class SentimentScoreSource(str, Enum):
+    """Where ``SentimentReport.overall_score`` actually came from.
+
+    Always derived deterministically in code (never trusted from the model),
+    the same principle already applied to ``ConvictionScore.total`` and
+    ``InitialResearchThesis.suggested_risk_unit``: a downstream consumer must
+    be able to tell a model-provided score from one this application filled
+    in by default, so a midpoint estimate never gets presented as the
+    model's own judgment.
+    """
+
+    MODEL = "MODEL"
+    INFERRED_FROM_BAND = "INFERRED_FROM_BAND"
 
 
 class SentimentReport(BaseModel):
@@ -361,6 +949,43 @@ class SentimentReport(BaseModel):
             "with concrete evidence so every point adds new signal for the trader."
         ),
     )
+    score_source: SentimentScoreSource = Field(
+        default=SentimentScoreSource.MODEL,
+        description="Derived automatically; do not set this yourself.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _recover_loose_shape(cls, data):
+        """Recover from two shapes seen in real runs with a weaker model:
+        ``band`` instead of ``overall_band``, and a missing ``overall_score``
+        (observed together in a live batch run, 2026-10-01). A band-only
+        report still carries real signal; losing it entirely to a missing
+        numeric field would discard a correct narrative and direction over a
+        guideline number the field description already pins per band.
+
+        ``overall_score`` is checked with ``is None``, not truthiness: a
+        falsy-but-valid ``0`` (maximally bearish) must survive unchanged, not
+        be mistaken for "missing" and overwritten by the band midpoint.
+        ``score_source`` is likewise always set here, in code, rather than
+        trusted from the model -- the same principle already applied to
+        ``ConvictionScore.total`` -- so an inferred score can never be
+        represented as the model's own judgment.
+        """
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if "overall_band" not in data and "band" in data:
+            data["overall_band"] = data.pop("band")
+        if data.get("overall_score") is None:
+            band_key = str(data.get("overall_band", "")).strip().lower()
+            midpoint = _SENTIMENT_BAND_SCORE_MIDPOINT.get(band_key)
+            if midpoint is not None:
+                data["overall_score"] = midpoint
+                data["score_source"] = SentimentScoreSource.INFERRED_FROM_BAND.value
+                return data
+        data["score_source"] = SentimentScoreSource.MODEL.value
+        return data
 
 
 def render_sentiment_report(report: SentimentReport) -> str:

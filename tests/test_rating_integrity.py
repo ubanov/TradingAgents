@@ -12,7 +12,12 @@ from __future__ import annotations
 import pytest
 
 import cli.run as cli_run
-from tradingagents.agents.rating import RATING_REVIEW, extract_rating, parse_rating
+from tradingagents.agents.rating import (
+    RATING_REVIEW,
+    extract_choice,
+    extract_rating,
+    parse_rating,
+)
 
 INVERTED = ("The aggressive analyst pushed hard for a Buy on the AI backlog, but the "
             "conservative case on margin compression carried the debate. "
@@ -58,6 +63,67 @@ def test_the_scale_quoted_in_a_prompt_does_not_become_the_rating():
     text = ("**Rating Scale**: Buy, Overweight, Hold, Underweight, Sell.\n\n"
             "**Rating**: Sell\n\nExit the position.")
     assert extract_rating(text) == "Sell"
+
+
+# --- standalone-heading tier (free-text fallback shape) ---------------------
+
+@pytest.mark.unit
+def test_bolded_standalone_heading_parses_without_a_label():
+    # Regression: a real Portfolio Manager free-text fallback began with
+    # "**Hold**" and no "Rating:" label at all; it used to read as unparsed.
+    text = "**Hold**\n\nExecutive Summary: no change warranted this week."
+    assert extract_rating(text) == "Hold"
+
+
+@pytest.mark.unit
+def test_bolded_standalone_heading_overweight():
+    text = "**Overweight**\n\nGradually add on dips."
+    assert extract_rating(text) == "Overweight"
+
+
+@pytest.mark.unit
+def test_standalone_heading_does_not_fire_on_a_full_sentence():
+    # "Hold" appearing as part of a sentence, not alone on its line, must not
+    # be read as a standalone declaration.
+    text = "We expect the market to Hold steady through earnings season."
+    assert extract_rating(text) == "Hold"  # still parses via the word-count tier
+    # But a sentence mentioning the word without it being the whole line must
+    # not spuriously satisfy the *standalone* tier when a label exists too:
+    labelled = "**Rating**: Sell\n\nWe expect the market to Hold steady."
+    assert extract_rating(labelled) == "Sell"
+
+
+@pytest.mark.unit
+def test_recommendation_label_is_recognised_like_rating():
+    assert extract_rating("Recommendation: Overweight\nAdd on dips.") == "Overweight"
+    assert extract_rating("**Recommendation**: Overweight\nAdd on dips.") == "Overweight"
+
+
+@pytest.mark.unit
+def test_portfolio_rating_label_is_recognised():
+    assert extract_rating("Portfolio Rating: Underweight\nTrim.") == "Underweight"
+
+
+# --- extract_choice: the generalised extractor behind Trader action too -----
+
+@pytest.mark.unit
+def test_extract_choice_supports_a_narrower_three_tier_scale():
+    actions = ("Buy", "Hold", "Sell")
+    assert extract_choice("**Action**: Buy\n\nEnter now.", actions, label_words=("action",)) == "Buy"
+    assert extract_choice("**Buy**\n\nEnter now.", actions, label_words=("action",)) == "Buy"
+    assert extract_choice("No clear call here.", actions, label_words=("action",)) is None
+
+
+@pytest.mark.unit
+def test_extract_choice_keeps_different_label_words_independent():
+    # A Trader "Action" label must not satisfy a Research Manager-style
+    # "recommendation"/"rating" lookup -- it has to fall back to the
+    # word-count tier, same as any other unlabelled text.
+    choices = ("Buy", "Overweight", "Hold", "Underweight", "Sell")
+    text = "**Action**: Buy\n\nEnter now."
+    assert extract_choice(text, choices, label_words=("recommendation", "rating")) == "Buy"
+    text_ambiguous = "**Action**: Buy\n\nThe Research Manager also discussed a Sell case."
+    assert extract_choice(text_ambiguous, choices, label_words=("recommendation", "rating")) is None
 
 
 # --- the readers agree ------------------------------------------------------

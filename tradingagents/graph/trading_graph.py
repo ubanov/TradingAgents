@@ -8,6 +8,7 @@ from typing import Any
 
 from tradingagents.agents.context import build_instrument_context, resolve_instrument_identity
 from tradingagents.agents.rating import parse_rating
+from tradingagents.agents.researchers.setup_tags import build_setup_tags_and_atr_for_instrument
 from tradingagents.dataflows.config import run_config, set_config
 from tradingagents.dataflows.date_window import get_current_date
 from tradingagents.dataflows.symbols import safe_ticker_component
@@ -147,7 +148,7 @@ class TradingAgentsGraph:
         """
         return "|".join([
             "analysts=" + ",".join(self.selected_analysts),
-            "research_debate=independent-review-v1",
+            "research_debate=structured-thesis-conviction-v1",
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
@@ -267,6 +268,7 @@ class TradingAgentsGraph:
         assembled the state itself would skip the decision log.
         """
         self.settle_pending(company_name)
+        setup_tags, atr_reference = build_setup_tags_and_atr_for_instrument(company_name, trade_date)
         return self.propagator.create_initial_state(
             company_name,
             trade_date,
@@ -276,6 +278,8 @@ class TradingAgentsGraph:
             ),
             instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
+            setup_tags=setup_tags,
+            atr_reference=atr_reference,
         )
 
     def settle_pending(self, company_name):
@@ -354,8 +358,53 @@ class TradingAgentsGraph:
             "news_report": final_state["news_report"],
             "fundamentals_report": final_state["fundamentals_report"],
             "investment_debate_state": {
+                "bull_initial": final_state["investment_debate_state"].get("bull_initial", ""),
+                "bear_initial": final_state["investment_debate_state"].get("bear_initial", ""),
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],
+                "review_outcomes": final_state["investment_debate_state"].get("review_outcomes", ""),
+                "current_bull_response": final_state["investment_debate_state"].get("current_bull_response", ""),
+                "current_bear_response": final_state["investment_debate_state"].get("current_bear_response", ""),
+                "bull_rebuttal_count": final_state["investment_debate_state"].get("bull_rebuttal_count", 0),
+                "bear_rebuttal_count": final_state["investment_debate_state"].get("bear_rebuttal_count", 0),
+                "debate_round": final_state["investment_debate_state"].get("debate_round", 0),
+                "verification_history": final_state["investment_debate_state"].get("verification_history", []),
+                "verifier_pass_count": final_state["investment_debate_state"].get("verifier_pass_count", 0),
+                "verification_status": final_state["investment_debate_state"].get("verification_status", ""),
+                "repair_triggered": final_state["investment_debate_state"].get("repair_triggered", False),
+                "repair_rounds": final_state["investment_debate_state"].get("repair_rounds", 0),
+                "repaired_agents": final_state["investment_debate_state"].get("repaired_agents", []),
+                "bull_repair": final_state["investment_debate_state"].get("bull_repair", ""),
+                "bear_repair": final_state["investment_debate_state"].get("bear_repair", ""),
+                "research_horizon": final_state["investment_debate_state"].get("research_horizon", ""),
+                "setup_tags": final_state["investment_debate_state"].get("setup_tags", {}),
+                "atr_reference": final_state["investment_debate_state"].get("atr_reference"),
+                "bull_thesis": final_state["investment_debate_state"].get("bull_thesis", {}),
+                "bear_thesis": final_state["investment_debate_state"].get("bear_thesis", {}),
+                "bull_conviction_history": final_state["investment_debate_state"].get(
+                    "bull_conviction_history", []
+                ),
+                "bear_conviction_history": final_state["investment_debate_state"].get(
+                    "bear_conviction_history", []
+                ),
+                "bull_trade_metrics": final_state["investment_debate_state"].get(
+                    "bull_trade_metrics", {}
+                ),
+                "bear_trade_metrics": final_state["investment_debate_state"].get(
+                    "bear_trade_metrics", {}
+                ),
+                "new_data_exceptions": final_state["investment_debate_state"].get(
+                    "new_data_exceptions", []
+                ),
+                "withdrawn_values": final_state["investment_debate_state"].get(
+                    "withdrawn_values", []
+                ),
+                "manager_integrity_status": final_state["investment_debate_state"].get(
+                    "manager_integrity_status", ""
+                ),
+                "manager_integrity_findings": final_state["investment_debate_state"].get(
+                    "manager_integrity_findings", []
+                ),
                 "history": final_state["investment_debate_state"]["history"],
                 "current_response": final_state["investment_debate_state"][
                     "current_response"
@@ -369,6 +418,15 @@ class TradingAgentsGraph:
                 "aggressive_history": final_state["risk_debate_state"]["aggressive_history"],
                 "conservative_history": final_state["risk_debate_state"]["conservative_history"],
                 "neutral_history": final_state["risk_debate_state"]["neutral_history"],
+                "aggressive_risk_level": final_state["risk_debate_state"].get(
+                    "aggressive_risk_level", ""
+                ),
+                "conservative_risk_level": final_state["risk_debate_state"].get(
+                    "conservative_risk_level", ""
+                ),
+                "neutral_risk_level": final_state["risk_debate_state"].get(
+                    "neutral_risk_level", ""
+                ),
                 "history": final_state["risk_debate_state"]["history"],
                 "judge_decision": final_state["risk_debate_state"]["judge_decision"],
             },

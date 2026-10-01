@@ -538,6 +538,20 @@ class TestDeferredReflection:
             raw, alpha, days, resolved = settlement.fetch_returns("NVDA", "2026-04-19")
         assert (raw, alpha, days, resolved) == (None, None, None, None)
 
+    def test_fetch_returns_zero_opening_price_stays_pending_instead_of_inf(self):
+        """A zero opening print (bad tick, halted/delisted name) must not
+        silently divide to inf/nan and corrupt the stored alpha figure."""
+        stock_prices = [0.0, 102.0, 104.0, 103.0, 105.0, 106.0]
+        spy_prices = [400.0, 402.0, 404.0, 403.0, 405.0, 406.0]
+        with patch("yfinance.Ticker") as mock_ticker_cls:
+            def _make_ticker(sym):
+                m = MagicMock()
+                m.history.return_value = _price_df(spy_prices if sym == "SPY" else stock_prices)
+                return m
+            mock_ticker_cls.side_effect = _make_ticker
+            result = settlement.fetch_returns("NVDA", "2026-01-05")
+        assert result == (None, None, None, None)
+
     def test_fetch_returns_delisted(self):
         """Empty DataFrame → returns all-None, no crash."""
         with patch("yfinance.Ticker") as mock_ticker_cls:
@@ -1014,7 +1028,9 @@ def test_a_longer_window_asks_for_enough_price_history(monkeypatch):
             asked["start"], asked["end"] = start, end
             import pandas as pd
             days = pd.bdate_range(start, end)
-            return pd.DataFrame({"Close": range(len(days))}, index=days)
+            # Non-zero opening price: a zero first close would (correctly)
+            # leave the outcome unsettled rather than divide by zero.
+            return pd.DataFrame({"Close": range(100, 100 + len(days))}, index=days)
 
     monkeypatch.setattr("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker", _Ticker)
 

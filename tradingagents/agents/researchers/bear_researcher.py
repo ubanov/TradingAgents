@@ -3,12 +3,28 @@ from tradingagents.agents.context import (
     get_language_instruction,
     report_or_absent,
 )
+from tradingagents.agents.researchers.setup_tags import render_setup_tags
+from tradingagents.agents.researchers.thesis_flow import (
+    apply_trade_plan_changes,
+    invoke_initial_thesis,
+    invoke_review,
+    recompute_trade_metrics,
+)
+from tradingagents.agents.schemas import InitialResearchThesis, ResearchReviewOutcome
+from tradingagents.agents.structured import bind_structured
 from tradingagents.prompts.loader import render_agent_prompt
 
 from .review_outcomes import merge_review_outcomes, review_guidance
 
 
 def create_bear_researcher(llm):
+    structured_initial_llm = bind_structured(
+        llm, InitialResearchThesis, "Bear Researcher (initial)"
+    )
+    structured_review_llm = bind_structured(
+        llm, ResearchReviewOutcome, "Bear Researcher (review)"
+    )
+
     def bear_node(state) -> dict:
         investment_debate_state = state["investment_debate_state"]
         history = investment_debate_state.get("history", "")
@@ -26,6 +42,8 @@ def create_bear_researcher(llm):
             if asset_type == "stock"
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
+        research_horizon = investment_debate_state.get("research_horizon", "")
+        setup_tags_text = render_setup_tags(investment_debate_state.get("setup_tags") or {})
 
         prompt_values = {
             "target_label": target_label,
@@ -36,12 +54,51 @@ def create_bear_researcher(llm):
             "fundamentals_label": fundamentals_label,
             "fundamentals_report": fundamentals_report,
         }
+
+        new_investment_debate_state = dict(investment_debate_state)
+
         if is_initial:
             prompt = render_agent_prompt(
-                "researchers/bear_initial.txt", **prompt_values
+                "researchers/bear_initial.txt",
+                **prompt_values,
+                research_horizon=research_horizon,
+                setup_tags=setup_tags_text,
             )
+            prompt += get_language_instruction()
+
+            rendered, thesis_dict = invoke_initial_thesis(
+                structured_initial_llm, llm, prompt, "Bear Researcher"
+            )
+            argument = f"Bear Analyst (Initial): {rendered}"
+
+            new_investment_debate_state.update(
+                {
+                    "history": history + "\n" + argument,
+                    "bear_history": bear_history + "\n" + argument,
+                    "current_response": argument,
+                    "count": investment_debate_state.get("count", 0) + 1,
+                    "bear_initial": argument,
+                    "current_bear_response": argument,
+                }
+            )
+            if thesis_dict is not None:
+                new_investment_debate_state["bear_thesis"] = thesis_dict
+                new_investment_debate_state["bear_conviction_history"] = [
+                    thesis_dict["conviction"]["total"]
+                ]
+                new_investment_debate_state["bear_trade_metrics"] = recompute_trade_metrics(
+                    thesis_dict, investment_debate_state.get("atr_reference")
+                )
         else:
             review_round = investment_debate_state.get("debate_round", 0) + 1
+            conviction_history = list(investment_debate_state.get("bear_conviction_history") or [])
+            prior_conviction = (
+                conviction_history[-1]
+                if conviction_history
+                else (investment_debate_state.get("bear_thesis") or {})
+                .get("conviction", {})
+                .get("total")
+            )
             prompt = render_agent_prompt(
                 "researchers/bear.txt",
                 **prompt_values,
@@ -55,36 +112,30 @@ def create_bear_researcher(llm):
                 review_outcomes=investment_debate_state.get("review_outcomes", "")
                 or "No classified outcomes from prior rounds.",
                 review_guidance=review_guidance(review_round),
+                research_horizon=research_horizon,
+                setup_tags=setup_tags_text,
+                prior_conviction=(
+                    str(prior_conviction)
+                    if prior_conviction is not None
+                    else "not previously recorded"
+                ),
             )
-        prompt += get_language_instruction()
+            prompt += get_language_instruction()
 
-        response = llm.invoke(prompt)
-
-        if is_initial:
-            argument = f"Bear Analyst (Initial): {response.content}"
-        else:
-            argument = f"Bear Analyst (Review {review_round}): {response.content}"
-
-        new_investment_debate_state = {
-            **investment_debate_state,
-            "history": history + "\n" + argument,
-            "bear_history": bear_history + "\n" + argument,
-            "current_response": argument,
-            "count": investment_debate_state.get("count", 0) + 1,
-        }
-        if is_initial:
-            new_investment_debate_state["bear_initial"] = argument
-            new_investment_debate_state["current_bear_response"] = argument
-        else:
-            pending_bull_rebuttal = investment_debate_state.get(
-                "pending_bull_rebuttal", ""
+            rendered, review_dict = invoke_review(
+                structured_review_llm, llm, prompt, "Bear Researcher"
             )
+            argument = f"Bear Analyst (Review {review_round}): {rendered}"
+
+            pending_bull_rebuttal = investment_debate_state.get("pending_bull_rebuttal", "")
             completed_round = pending_bull_rebuttal + "\n" + argument
             new_investment_debate_state.update(
                 {
-                    "rebuttal_history": investment_debate_state.get(
-                        "rebuttal_history", ""
-                    )
+                    "history": history + "\n" + argument,
+                    "bear_history": bear_history + "\n" + argument,
+                    "current_response": argument,
+                    "count": investment_debate_state.get("count", 0) + 1,
+                    "rebuttal_history": investment_debate_state.get("rebuttal_history", "")
                     + "\n"
                     + completed_round,
                     "review_outcomes": merge_review_outcomes(
@@ -95,13 +146,36 @@ def create_bear_researcher(llm):
                     "pending_bull_rebuttal": "",
                     "current_bull_response": pending_bull_rebuttal,
                     "current_bear_response": argument,
-                    "bear_rebuttal_count": investment_debate_state.get(
-                        "bear_rebuttal_count", 0
-                    )
+                    "bear_rebuttal_count": investment_debate_state.get("bear_rebuttal_count", 0)
                     + 1,
                     "debate_round": investment_debate_state.get("debate_round", 0) + 1,
                 }
             )
+            if review_dict is not None:
+                current_thesis = investment_debate_state.get("bear_thesis") or {}
+                if current_thesis:
+                    updated_thesis, withdrawn = apply_trade_plan_changes(
+                        current_thesis, review_dict
+                    )
+                    new_investment_debate_state["bear_thesis"] = updated_thesis
+                    new_investment_debate_state["bear_trade_metrics"] = recompute_trade_metrics(
+                        updated_thesis, investment_debate_state.get("atr_reference")
+                    )
+                    if withdrawn:
+                        new_investment_debate_state["withdrawn_values"] = (
+                            investment_debate_state.get("withdrawn_values", []) + withdrawn
+                        )
+                new_investment_debate_state["bear_conviction_history"] = conviction_history + [
+                    review_dict["conviction_after"]
+                ]
+                if review_dict.get("new_data_exceptions"):
+                    tagged = [
+                        {**exc, "side": "bear", "round": review_round}
+                        for exc in review_dict["new_data_exceptions"]
+                    ]
+                    new_investment_debate_state["new_data_exceptions"] = (
+                        investment_debate_state.get("new_data_exceptions", []) + tagged
+                    )
 
         return {"investment_debate_state": new_investment_debate_state}
 

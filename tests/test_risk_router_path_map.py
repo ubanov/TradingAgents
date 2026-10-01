@@ -10,7 +10,11 @@ mid-run on prompt/i18n/refactor drift in the speaker labels.
 import pytest
 
 from tradingagents.graph.conditional_logic import ConditionalLogic
-from tradingagents.graph.setup import DEBATE_PATH_MAP, RISK_ANALYSIS_PATH_MAP
+from tradingagents.graph.setup import (
+    DEBATE_PATH_MAP,
+    RISK_ANALYSIS_PATH_MAP,
+    VERIFICATION_PATH_MAP,
+)
 
 
 def _state(latest_speaker, count=0):
@@ -106,4 +110,27 @@ def test_debate_path_map_covers_full_router_range():
         )
     }
     assert returns <= set(DEBATE_PATH_MAP)
-    assert "Research Manager" in returns  # terminal reachable
+    assert "Research Verifier" in returns  # terminal reachable
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("status", "repair_rounds", "expected"),
+    [
+        ("PASS", 0, "Research Manager"),
+        ("WARN", 0, "Research Manager"),
+        ("FAIL", 0, "Bull Repair"),
+        ("FAIL", 1, "Research Manager"),
+    ],
+)
+def test_verification_router_is_bounded(status, repair_rounds, expected):
+    logic = ConditionalLogic(max_debate_rounds=3)
+    state = {
+        "investment_debate_state": {
+            "verification_status": status,
+            "repair_rounds": repair_rounds,
+        }
+    }
+    target = logic.should_continue_verification(state)
+    assert target == expected
+    assert target in VERIFICATION_PATH_MAP

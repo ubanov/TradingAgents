@@ -41,3 +41,19 @@ def test_reasoning_model_receives_effort(monkeypatch):
 def test_non_reasoning_model_drops_effort(monkeypatch):
     # gpt-4.1 would 400 with reasoning_effort — it must be dropped.
     assert _effort_on("gpt-4.1", monkeypatch) is None
+
+
+def _temperature_on(model, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = OpenAIClient(model, provider="openai", temperature=0.2).get_llm()
+    return llm.temperature
+
+
+def test_reasoning_model_drops_temperature(monkeypatch):
+    # Reasoning-tier models 400 on a non-default temperature, same failure
+    # mode as reasoning_effort above.
+    assert _temperature_on("gpt-5.4-mini", monkeypatch) is None
+
+
+def test_non_reasoning_model_keeps_temperature(monkeypatch):
+    assert _temperature_on("gpt-4.1", monkeypatch) == 0.2

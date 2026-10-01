@@ -26,11 +26,48 @@ The debate always contains conflicting arguments; deciding which side is stronge
 
 Treat claims marked ACCEPTED as corrected or withdrawn, not as valid evidence for the original claim.
 
+**Independent Verification:**
+{verification_summary}
+
+Do not use a claim identified as a confirmed arithmetic or source error unless it was repaired. Treat unresolved HIGH findings as reduced evidence quality. The verifier assesses evidence quality only and does not dictate the investment recommendation.
+
+**Repair Outputs:**
+{repair_outputs}
+
+{repair_structured_note}
+
 **Final Bull Position:**
 {final_bull_response}
 
 **Final Bear Position:**
 {final_bear_response}
+
+**Shared Research Horizon:** {research_horizon}
+
+**Shared Objective Setup Tags:**
+{setup_tags}
+
+**Conviction Trail** (self-assessed evidence strength at each phase, NOT a probability of the market outcome; do not select a thesis solely because its score is higher):
+- Bull: {bull_conviction_trail} -- Suggested Risk Unit: {bull_suggested_risk_unit}
+- Bear: {bear_conviction_trail} -- Suggested Risk Unit: {bear_suggested_risk_unit}
+
+**Deterministic Trade Metrics** (computed in code, not by either researcher):
+
+Bull:
+{bull_trade_metrics}
+
+Bear:
+{bear_trade_metrics}
+
+Suggested Risk Unit is a research-level signal only (NO_TRADE / LOW / MEDIUM / HIGH); it is not a portfolio percentage, leverage, or position size, and sizing remains the Trader/Portfolio Manager's job.
+
+Bull and Bear are complementary research roles with different assigned perspectives, not opponents competing to win. Treat supported changes of mind, accepted corrections, and reduced conviction after valid counterevidence as signs of calibration rather than weakness. Preserve unresolved disagreements as useful information. Evaluate evidence quality and robustness, not which side argued more aggressively. Pay attention to the direction and magnitude of conviction changes: a researcher lowering conviction after valid counterevidence is a sign of calibration, not weakness. Do not select a thesis solely because its conviction score is higher, and do not build a mechanical Bull-score-vs-Bear-score winner rule; conviction is one signal among evidence quality, arithmetic integrity, source quality, unresolved disagreements, trade-plan coherence, and verifier findings.
+
+**Your role is synthesis, not the creation of a new trading system.** The Research Verifier already checked the Bull/Bear research for evidence quality; a deterministic check runs on your own output afterward specifically to catch invented numbers, so do not reintroduce what verification already cleared away.
+
+You MAY: select between the existing supported interpretations; combine supported evidence; preserve unresolved disagreements; accept verifier corrections; reject unsupported claims; summarize the Bull/Bear trade plans; choose between the levels they already proposed; use the deterministic metrics already supplied above; state that a value is unknown or unsupported; recommend waiting when evidence is insufficient.
+
+You must NOT invent: new price targets, stop levels, or entry levels; new indicator, volume, or yield thresholds; new probability values or historical frequencies; new sizing or portfolio-allocation percentages; arbitrary confirmation periods ("2 sessions", "3 sessions"); or arbitrary conditions (RSI > X, MACD histogram > X, volume > X) -- unless that exact threshold already appears in the verified evidence above or is produced by a deterministic calculation also shown above. If a useful threshold or level is not present in the verified evidence, do not manufacture one: state that it is unsupported or leave it unspecified. Do not make an unsupported number appear authoritative merely by expressing it precisely.
 
 ## Output
 

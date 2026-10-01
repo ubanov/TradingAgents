@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import questionary
+import typer
 from dotenv import find_dotenv, set_key
 
 from cli.display import console
@@ -55,7 +56,7 @@ def get_ticker() -> str:
 
     if ticker is None:
         console.print("\n[red]No ticker symbol provided. Exiting...[/red]")
-        exit(1)
+        raise typer.Exit(code=1)
 
     return normalize_ticker_symbol(ticker) if ticker.strip() else "SPY"
 

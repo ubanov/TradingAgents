@@ -4,6 +4,7 @@ from typing import Any
 from langchain_openai import AzureChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
+from .openai_client import _supports_reasoning_effort
 
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "api_key", "reasoning_effort", "temperature",
@@ -30,6 +31,7 @@ class AzureOpenAIClient(BaseLLMClient):
 
     def __init__(self, model: str, base_url: str | None = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
+        self.provider = "azure"
 
     def get_llm(self) -> Any:
         """Return configured AzureChatOpenAI instance."""
@@ -40,9 +42,19 @@ class AzureOpenAIClient(BaseLLMClient):
             "azure_deployment": os.environ.get("AZURE_OPENAI_DEPLOYMENT_NAME", self.model),
         }
 
+        # A deployment named after a reasoning-tier model (o-series, GPT-5+)
+        # 400s on reasoning_effort/non-default temperature exactly like native
+        # OpenAI does (see openai_client.py); a non-reasoning deployment name
+        # is unaffected since _supports_reasoning_effort is then False.
+        reasoning_tier = _supports_reasoning_effort(self.model)
         for key in _PASSTHROUGH_KWARGS:
-            if key in self.kwargs:
-                llm_kwargs[key] = self.kwargs[key]
+            if key not in self.kwargs:
+                continue
+            if key == "reasoning_effort" and not reasoning_tier:
+                continue
+            if key == "temperature" and reasoning_tier:
+                continue
+            llm_kwargs[key] = self.kwargs[key]
 
         return NormalizedAzureChatOpenAI(**llm_kwargs)
 

@@ -328,6 +328,12 @@ class OpenAIClient(BaseLLMClient):
                 continue
             if key == "reasoning_effort" and not _supports_reasoning_effort(self.model):
                 continue
+            # OpenAI's reasoning-tier models (o-series, GPT-5+) 400 on a
+            # non-default temperature ("Unsupported value: 'temperature' does
+            # not support 0.2 with this model"), same failure mode as
+            # reasoning_effort above -- and the same model check identifies them.
+            if key == "temperature" and _supports_reasoning_effort(self.model):
+                continue
             llm_kwargs[key] = self.kwargs[key]
 
         # The subclass (provider quirks) comes from the registry spec.

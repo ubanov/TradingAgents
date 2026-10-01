@@ -1,6 +1,7 @@
 """Running one analysis from the CLI: build the graph, stream it into the live view, save the report."""
 
 import datetime
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -35,7 +36,115 @@ from tradingagents.graph.analyst_execution import (
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.reporting import write_report_tree
 
+logger = logging.getLogger(__name__)
+
 RESEARCH_REVIEW_ROUNDS_BY_DEPTH = {1: 1, 3: 2, 5: 3}
+
+
+def format_duration(seconds: float) -> str:
+    total = int(round(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+# Pipeline stages a failure can be attributed to, in execution order. Shared
+# by the failure-stage inference below and any caller that wants to validate
+# or display a stage name, so the vocabulary has exactly one source.
+PIPELINE_STAGES: tuple[str, ...] = (
+    "market_analyst",
+    "sentiment_analyst",
+    "news_analyst",
+    "fundamentals_analyst",
+    "research_initial",
+    "research_review",
+    "verifier",
+    "repair",
+    "research_manager",
+    "trader",
+    "risk",
+    "portfolio_manager",
+    "report_generation",
+)
+
+_ANALYST_STAGE_KEYS: tuple[tuple[str, str], ...] = (
+    ("market_report", "market_analyst"),
+    ("sentiment_report", "sentiment_analyst"),
+    ("news_report", "news_analyst"),
+    ("fundamentals_report", "fundamentals_analyst"),
+)
+
+
+def infer_failure_stage(final_state: dict[str, Any] | None, max_risk_discuss_rounds: int = 1) -> str:
+    """Best-effort guess at the furthest pipeline stage a failed run reached,
+    from whatever partial state the stream yielded before the exception.
+
+    Checked in reverse pipeline order so the LATEST reached stage wins: e.g. a
+    run whose risk discussion finished all its turns but never got a
+    Portfolio Manager decision failed AT Portfolio Manager, not somewhere
+    earlier just because repair/verifier fields are also present.
+
+    Not an exact science -- a node that partially mutated shared keys before
+    raising could be misattributed -- but every real agent node in this graph
+    only ever returns (and thus only ever contributes to a streamed chunk)
+    once it has fully completed, so in practice the furthest-populated marker
+    reliably identifies the stage that was in progress when the exception hit.
+    """
+    final_state = final_state or {}
+    debate = final_state.get("investment_debate_state") or {}
+    risk = final_state.get("risk_debate_state") or {}
+
+    if final_state.get("final_trade_decision") or risk.get("judge_decision"):
+        return "complete"
+    if max_risk_discuss_rounds > 0 and risk.get("count", 0) >= 3 * max_risk_discuss_rounds:
+        return "portfolio_manager"
+    if risk.get("count", 0) > 0 or final_state.get("trader_investment_plan"):
+        return "risk"
+    if debate.get("judge_decision") or debate.get("manager_integrity_status"):
+        return "trader"
+    verification_history = debate.get("verification_history") or []
+    if verification_history:
+        last_pass = verification_history[-1]
+        if last_pass.get("status") == "FAIL" and not debate.get("repair_triggered"):
+            return "repair"
+        return "research_manager"
+    if debate.get("debate_round", 0) > 0 or (debate.get("bull_initial") and debate.get("bear_initial")):
+        return "verifier"
+    if debate.get("bull_initial") or debate.get("bear_initial"):
+        return "research_review"
+    for report_key, stage in _ANALYST_STAGE_KEYS:
+        if not final_state.get(report_key):
+            return stage
+    return "research_initial"
+
+
+class PartialExecutionError(RuntimeError):
+    """Raised when the graph fails mid-run.
+
+    Carries whatever state/stats were captured from the stream before the
+    failure, so a caller can save a partial report and a rich error result
+    instead of losing completed work (a real run lost ~2h43m of finished
+    analysis, verification, repair, research management, trading, and a full
+    9-turn risk discussion to an uncaught exception immediately before
+    Portfolio Manager).
+    """
+
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        final_state: dict[str, Any],
+        stats: dict[str, Any],
+        duration_seconds: float,
+        failure_stage: str,
+        report_path: Path | None,
+    ):
+        super().__init__(str(cause))
+        self.cause = cause
+        self.final_state = final_state
+        self.stats = stats
+        self.duration_seconds = duration_seconds
+        self.failure_stage = failure_stage
+        self.report_path = report_path
 
 
 @dataclass(frozen=True)
@@ -155,6 +264,7 @@ def execute_analysis(
             on_checkpoint(graph)
 
     trace = []
+    stream_error: Exception | None = None
     try:
         for chunk in graph.graph.stream(graph.checkpoint_input(init_agent_state), **args):
             trace.append(chunk)
@@ -169,8 +279,52 @@ def execute_analysis(
         graph.clear_checkpoint_on_success(
             ticker, analysis_date, asset_type, portfolio
         )
+    except Exception as exc:
+        # Whatever the graph yielded before failing is still real, completed
+        # work (hours of it, in the run that motivated this): merge it the
+        # same way the success path does, rather than losing it.
+        stream_error = exc
+        final_state = {}
+        for chunk in trace:
+            final_state.update(chunk)
     finally:
         graph.end_checkpoint()
+
+    duration_seconds = time.monotonic() - started
+    stats = stats_handler.get_stats()
+
+    if stream_error is not None:
+        failure_stage = infer_failure_stage(final_state, config.get("max_risk_discuss_rounds", 1))
+        if failure_stage == "complete":
+            # The graph itself finished; something after it (saving the
+            # report, recording the decision) is what actually failed.
+            failure_stage = "report_generation"
+        partial_report_path = None
+        if output_dir is not None:
+            try:
+                partial_report_path = write_report_tree(
+                    final_state,
+                    ticker,
+                    output_dir,
+                    error_banner=(
+                        f"Execution failed at stage '{failure_stage}' after "
+                        f"{format_duration(duration_seconds)}: {stream_error}"
+                    ),
+                    output_filename="partial_report.md",
+                )
+            except Exception:
+                logger.warning(
+                    "Could not write a partial report for %s after failure at %s",
+                    ticker, failure_stage, exc_info=True,
+                )
+        raise PartialExecutionError(
+            stream_error,
+            final_state=final_state,
+            stats=stats,
+            duration_seconds=duration_seconds,
+            failure_stage=failure_stage,
+            report_path=partial_report_path,
+        ) from stream_error
 
     report_path = (
         write_report_tree(final_state, ticker, output_dir)
@@ -183,8 +337,8 @@ def execute_analysis(
         final_state=final_state,
         rating=graph.process_signal(final_state.get("final_trade_decision", "")),
         report_path=report_path,
-        duration_seconds=time.monotonic() - started,
-        stats=stats_handler.get_stats(),
+        duration_seconds=duration_seconds,
+        stats=stats,
         graph=graph,
     )
 

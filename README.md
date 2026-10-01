@@ -1,3 +1,408 @@
+# Experimental TradingAgents Fork
+
+> [!IMPORTANT]
+> This repository is an experimental fork of
+> [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents),
+> based on upstream **TradingAgents v0.5.1**.
+>
+> Fork repository:
+> [https://github.com/ubanov/TradingAgents](https://github.com/ubanov/TradingAgents)
+>
+> The original project and its authors remain the source of the underlying
+> TradingAgents framework. This fork adds a set of experimental changes focused
+> on prompt transparency, evidence integrity, debate structure, verification,
+> unattended execution, and future evaluation of agent recommendations.
+
+## Changes in this fork
+
+### Prompt architecture
+
+- Agent prompts have been externalized from Python code into text files under
+  `tradingagents/prompts/`, making them easier to inspect, modify, compare, and
+  version independently from the agent implementation.
+
+- A shared `global_policy.txt` has been added and is automatically applied to
+  the relevant LLM agents.
+
+- The shared policy includes common numerical and evidence-integrity rules:
+  - do not present unsupported numerical claims as facts;
+  - verify arithmetic before relying on a numerical result;
+  - independently check numerical claims made by other agents;
+  - do not invent probabilities, historical frequencies, expected outcomes,
+    or other statistics when they are not supported by supplied data;
+  - preserve units and distinguish price distance, ATR, volatility, position
+    size, notional exposure, and portfolio risk;
+  - prefer evidence, calculations, and explicit reasoning over rhetorical
+    argument.
+
+### Research debate architecture
+
+- The Bull and Bear researchers now create their **initial theses
+  independently** from the Analyst Team reports.
+
+- The initial Bull thesis is generated without seeing the Bear thesis, and the
+  initial Bear thesis is generated without seeing the Bull thesis. This is
+  intended to reduce first-mover bias and prevent one side from anchoring the
+  other's initial interpretation.
+
+- After the independent phase, Bull and Bear enter explicit **cross-review
+  rounds** where they can challenge calculations, evidence, assumptions,
+  contradictions, and unsupported conclusions in the opposing thesis.
+
+- Reviews explicitly classify disputed points using states such as
+  **ACCEPTED**, **REJECTED**, and **UNRESOLVED**.
+
+- Research depth controls the number of Bull/Bear review rounds:
+  - **Shallow:** 1 review round;
+  - **Medium:** 2 review rounds;
+  - **Deep:** 3 review rounds.
+
+- Research review depth is kept separate from Risk Management discussion depth,
+  so increasing research depth does not implicitly increase unrelated Risk
+  debate.
+
+### Collaborative research reviews
+
+- Bull and Bear retain distinct bullish and bearish perspectives so the same
+  evidence is explored from materially different starting points.
+
+- During cross-review they act as complementary researchers with the shared
+  objective of improving forecast accuracy, calibration, evidence quality,
+  and robustness, rather than trying to win a debate.
+
+- Accepting a supported correction or lowering conviction after valid
+  counterevidence is treated as a successful research outcome, not a loss.
+  Genuinely unresolved disagreements remain explicit instead of being forced
+  into artificial consensus.
+
+### Research Verifier
+
+- An independent **Research Verifier** has been added between the completed
+  Bull/Bear debate and the Research Manager.
+
+- The verifier does not decide whether the bullish or bearish investment thesis
+  is preferable. Its role is quality control.
+
+- It checks for issues such as:
+  - arithmetic errors;
+  - unit or dimensional errors;
+  - unsupported claims;
+  - source/evidence mismatches;
+  - contradictions;
+  - conclusions that materially overstate the supplied evidence.
+
+- Verification results distinguish between **PASS**, **WARN**, and **FAIL**.
+
+- Material verification failures can trigger a bounded **repair round** before
+  the result is passed to the Research Manager.
+
+- The repair process is deliberately bounded so the system cannot enter an
+  indefinite verifier/repair loop.
+
+- Repair reuses the same structured review mechanism as a normal cross-review
+  round: when it succeeds, the repaired position updates the canonical
+  `bull_thesis`/`bear_thesis` (trade-plan levels, conviction) the same way a
+  review would, so the Research Manager, the post-manager integrity check, and
+  the Trader all see the repaired levels automatically. A level that a repair
+  revises or withdraws is tracked the same way a normal review's is, and can
+  never again be treated as active verified provenance. If structured output
+  is unavailable, the repair still produces free text for semantic context,
+  but the structured trade plan is explicitly left unchanged rather than
+  guessed at — this is recorded per side (`APPLIED` / `TEXT_ONLY` / `NOT_RUN`)
+  and surfaced to the Research Manager and the Trader so neither treats a
+  stale structured value as repair-confirmed.
+
+### Research Manager integrity check
+
+- The Research Verifier checks the Bull/Bear research *before* it reaches the
+  Research Manager, but the manager itself is a free-text-capable synthesis
+  step: real runs showed it could reintroduce a numeric threshold, sizing
+  rule, or price level that was never in the verified evidence (e.g. an
+  invented MACD-histogram threshold, volume threshold, allocation percentage,
+  or yield trigger).
+
+- The Research Manager's prompt is now explicit that its role is **synthesis
+  of the verified research, not creation of a new trading system**: it may
+  select between, combine, or summarize existing supported interpretations
+  and deterministic metrics, but must not invent new price targets, stops,
+  thresholds, probabilities, historical frequencies, sizing/allocation
+  percentages, or arbitrary confirmation conditions.
+
+- A lightweight, **deterministic, LLM-free check** runs immediately after the
+  Research Manager and before the Trader. It builds a pool of every number
+  already traceable to the analyst reports, the verified Bull/Bear trade
+  plans, or deterministic calculations, then flags any operational
+  threshold/sizing claim in the manager's output that isn't traceable to it,
+  a trade-plan level withdrawn during review resurfacing, or conviction
+  being described as a forecast probability. No LLM call is added, and no
+  automatic correction loop is triggered.
+
+- Result is **PASS** or **WARN** with compact finding categories
+  (`NEW_UNSUPPORTED_THRESHOLD`, `NEW_UNSUPPORTED_LEVEL`,
+  `UNSUPPORTED_SIZING_RULE`, `CONVICTION_AS_PROBABILITY`,
+  `WITHDRAWN_VALUE_REUSED`, among others). On WARN, the offending claims are
+  not silently rewritten or dropped (the manager's text could change
+  meaning); they are passed to the Trader explicitly marked as unsupported,
+  rather than as if they were verified input.
+
+### Constrained review rounds
+
+- Normal Bull/Bear review rounds primarily defend, refute, correct, accept, or
+  withdraw claims already present in the initial theses, using only:
+  - the supplied analyst reports;
+  - either side's initial thesis;
+  - the shared objective setup tags;
+  - deterministic recalculations from numbers already in that evidence.
+
+- Reviews should not introduce a new market fact, source, price level,
+  threshold, or catalyst that cannot be derived from that evidence.
+
+- **NEW_DATA_EXCEPTION**: a narrow, explicit exception for when a new datum is
+  genuinely necessary to correct a material factual misunderstanding. A review
+  that uses one must mark it explicitly, with what the datum is, why it is
+  necessary, and where it came from. The Research Verifier can flag an
+  unmarked introduction of new data or an unnecessary/poorly justified
+  exception.
+
+### Structured Bull/Bear trade hypotheses
+
+- Each initial Bull and Bear thesis commits to a structured trade hypothesis:
+  direction, conviction (see below), an explicit shared analysis horizon,
+  entry level or range, take-profit target, and stop-loss/invalidation level,
+  alongside supporting evidence, key risks, and explicit data gaps.
+
+- Entry, take-profit, and stop-loss are explicit commitments. Later review
+  rounds classify each as **KEEP**, **REVISE**, or **WITHDRAW** rather than
+  freely replacing them; a REVISE or WITHDRAW must state a reason grounded in
+  already-supplied evidence.
+
+- Bear's direction represents a bearish/reduce-risk thesis, consistent with
+  the existing Trader semantics (Buy/Hold/Sell) — it is not forced into a
+  literal short trade.
+
+### Conviction semantics
+
+- Conviction is a structured 0–100 score with four 0–25 components (evidence
+  quality, internal consistency, robustness to challenge, trade-plan
+  coherence). The total is always recomputed deterministically from the
+  components in code, so it cannot drift from a model's own arithmetic.
+
+- **Conviction is a self-assessed evidence-strength score, NOT a calibrated
+  probability of the market outcome**, and the Research Manager is told not to
+  select a thesis, or build a mechanical winner rule, solely because its
+  conviction score is higher.
+
+- Conviction is tracked across the debate: an initial value, a value after
+  each review round, and a required reason whenever it changes materially.
+  Lowering conviction after valid counterevidence is treated as a successful,
+  well-calibrated research outcome, not a loss.
+
+### Shared research horizon
+
+- Bull and Bear use the same explicit analysis horizon (a shared config value,
+  not independently chosen), so one side cannot silently reason over a
+  materially different holding window than the other.
+
+### Objective setup tags
+
+- A small, fixed v1 taxonomy of objective market-state tags (RSI bucket, MACD
+  sign, MACD histogram sign, price vs. EMA10/SMA20/SMA50, SMA50-vs-SMA200,
+  ATR% bucket, volume-vs-average bucket, trend structure) is computed
+  deterministically from market data, once per run, and given identically to
+  both Bull and Bear.
+
+- Tags are objective buckets, not interpretations: Bull and Bear may read the
+  same tags differently, and that disagreement is intentional. The taxonomy
+  deliberately excludes semantic/interpretive tags (e.g. "BULL_FLAG",
+  "ACCUMULATION").
+
+### Deterministic trade calculations
+
+- Risk, reward, reward/risk ratio, percentage distances, and ATR-multiple
+  distances for each side's trade plan are computed in plain code from the
+  committed entry/take-profit/stop-loss/ATR values, never by the LLM.
+
+- An entry given as a range uses its midpoint as the reference price for these
+  calculations (a documented default rule); missing entry/target/stop values
+  degrade the metrics gracefully instead of erroring.
+
+- The Trader now receives this same deterministic trade plan (entry, take
+  profit, stop loss, reward/risk, ATR distance) for both sides directly from
+  the research team's verified state, and is instructed to prefer those
+  levels over inventing its own from the market report alone.
+
+### Suggested risk unit
+
+- Each side's thesis carries a `SUGGESTED_RISK_UNIT` (`NO_TRADE` / `LOW` /
+  `MEDIUM` / `HIGH`), mapped deterministically from its conviction score
+  (`<50` → `NO_TRADE`, `50–64` → `LOW`, `65–79` → `MEDIUM`, `80+` → `HIGH`).
+
+- **This is a research-level signal only. It is NOT a portfolio percentage,
+  leverage, or position size** — actual position sizing remains the
+  Trader/Portfolio Manager's job and is not implemented by this value.
+
+### Non-interactive and batch CLI execution
+
+- Added non-interactive CLI execution so TradingAgents can be run from scripts
+  without answering interactive questions.
+
+- Added batch execution for analysing multiple tickers sequentially using a
+  shared configuration and fixed analysis date.
+
+- Batch execution isolates ticker failures so one failed analysis does not
+  prevent the remaining tickers from being processed.
+
+- Batch runs can generate:
+  - the complete report for each ticker;
+  - structured per-ticker result data;
+  - an aggregate Markdown summary;
+  - an aggregate machine-readable summary.
+
+- Aggregate summaries are generated deterministically from completed run
+  results rather than by making an additional LLM call.
+
+- `tradingagents batch` only requires `--tickers` (or `--tickers-file`); every
+  other option now has a default, resolved in this order — an explicit flag,
+  then an environment variable, then a hardcoded fallback:
+  - `--date`: today's date (`YYYY-MM-DD`), fixed once when the command
+    starts, so a run that crosses midnight keeps using the day it started on;
+  - `--output-dir`: `.\test\<date>`;
+  - `--language`: `TRADINGAGENTS_OUTPUT_LANGUAGE`, else `English`;
+  - `--depth`: `TRADINGAGENTS_DEPTH`, else `medium`;
+  - `--analysts`: `TRADINGAGENTS_ANALYSTS`, else all four
+    (`market,social,news,fundamentals`).
+
+  Example — analyze three tickers with every other setting defaulted:
+  ```bash
+  tradingagents batch --tickers NVDA,SPY,BTC-USD
+  ```
+
+### Structured-output consistency in Risk Management
+
+- The three Risk Management debators (Aggressive, Conservative, Neutral) now
+  follow the same structured-output-with-free-text-fallback pattern already
+  used by the Trader, Research Manager, and Portfolio Manager, instead of
+  being the only free-text-only debate participants.
+
+- Each turn still produces the same free-form conversational argument, but
+  now carries an explicit `risk_level` (`LOW`/`MEDIUM`/`HIGH`) alongside it:
+  that debator's own read of how risky the Trader's current plan is, not a
+  label for their assigned archetype. The latest reading from each analyst is
+  shown to the Portfolio Manager and in the saved report.
+
+### Bug fixes
+
+This fork also carries a set of correctness fixes found during an internal
+audit, applied on top of upstream behavior:
+
+- A decision whose holding window opened at a zero price (bad vendor tick, a
+  halted/delisted name) no longer silently divides to `inf`/`nan`; the memory
+  log now leaves it pending instead of storing a corrupted return that would
+  have poisoned any later average (e.g. a backtest's mean alpha for that
+  rating bucket).
+- The Yahoo OHLCV cache is now written atomically (temp file + rename), so two
+  graphs running concurrently in the same process can no longer read a
+  partially-written cache file for the same symbol.
+- `temperature` is no longer forwarded to OpenAI/Azure reasoning-tier models
+  (o-series, GPT-5+) when explicitly configured — those models reject a
+  non-default value, the same failure mode already handled for
+  `reasoning_effort`.
+- FRED rate limits and outages (HTTP 429/5xx) are now classified the same way
+  every other vendor's are, so the router's existing graceful-degradation path
+  applies instead of surfacing a generic HTTP error.
+- A single invalid ticker in a batch run (and the aggregate summary generated
+  afterward) can no longer abort the rest of the batch; the failure is now
+  isolated and reported per-ticker like any other.
+- Minor: an Azure OpenAI client was mislabeled as `azureopenai` instead of
+  `azure` in warnings; a non-Typer `exit()` call in the interactive ticker
+  prompt was replaced with the same clean-exit path used everywhere else in
+  the CLI.
+- The Sentiment Analyst's `overall_score = 0` (maximally bearish) was
+  incorrectly treated as a missing value and silently overwritten with the
+  band's midpoint; a genuine zero now survives unchanged, and a
+  deterministically inferred score is explicitly marked `INFERRED_FROM_BAND`
+  rather than presented as the model's own judgment (`score_source`).
+- A run that fails after the risk discussion completes (observed as an
+  uncaught `KeyError` building the Portfolio Manager prompt) no longer loses
+  the hours of completed work ahead of it: every agent prompt now renders
+  safely against missing placeholders instead of raising, and a failure
+  partway through the graph is caught, tagged with the furthest pipeline
+  stage reached (`failure_stage`), and saved as `partial_report.md` /
+  `result.json` with everything completed so far (analyst reports, Bull/Bear
+  research, verification, repair, the Research Manager's plan, the Trader's
+  plan, and the risk discussion) — clearly banner-marked as an incomplete run,
+  never presented as a final recommendation. A batch run's summary links a
+  failed ticker's partial report the same way it links a successful one's.
+- Rating/action parsing (Trader, Research Manager, Portfolio Manager) now
+  recognizes a bolded standalone heading (`**Hold**`, `**Overweight**`) and
+  `Rating:`/`Recommendation:` labels alike, instead of only one exact
+  `**Label**: Value` shape; an output that still can't be parsed keeps its raw
+  text and is marked `unparsed` rather than guessed at.
+
+## Planned experiments
+
+The following ideas are planned or under evaluation and should not be
+considered part of the implemented architecture until they are completed.
+
+### Position sizing
+
+- Convert the research-level `SUGGESTED_RISK_UNIT` (implemented) and trade
+  quality into an actual position size, using deterministic code over entry,
+  stop, volatility (ATR), and portfolio-risk constraints (e.g. max risk per
+  trade, portfolio equity).
+
+- Position sizing should not directly equate an LLM conviction score with a
+  portfolio percentage — conviction only selects the bounded risk unit; sizing
+  math is separate and deterministic.
+
+### Historical recommendation tracking
+
+- Persist structured recommendations from:
+  - Bull;
+  - Bear;
+  - Research Manager;
+  - final Portfolio Manager.
+
+- Record their initial thesis, final thesis, conviction, trade levels, and key
+  reasoning in a structured history.
+
+- Update completed recommendations later using realised market prices.
+
+- Possible outcomes include:
+  - entry not triggered;
+  - take profit reached;
+  - stop loss reached;
+  - expired at the defined horizon.
+
+- Additional statistics may include maximum favourable excursion, maximum
+  adverse excursion, realised return, and time to outcome.
+
+### Historical feedback
+
+- Build deterministic historical-performance summaries for future analyses.
+
+- The initial Bull and Bear researchers may receive relevant historical
+  performance context, while normal review agents should not receive this
+  additional information.
+
+- Historical summaries may include:
+  - overall results;
+  - results by conviction range;
+  - results for similar technical conditions;
+  - recurring failure patterns;
+  - recurring strengths.
+
+- The objective is to allow agents to recognise patterns such as:
+  "this type of setup has historically been weak for my thesis"
+  without treating past results as a guarantee of future performance.
+
+- Historical context should be derived as far as possible from objective,
+  structured market variables rather than free-form LLM narratives, to reduce
+  feedback loops and confirmation bias.
+
+---
+
+
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>

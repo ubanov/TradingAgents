@@ -5,7 +5,9 @@ from langgraph.prebuilt import ToolNode
 
 from tradingagents.agents import (
     create_aggressive_debator,
+    create_bear_repair,
     create_bear_researcher,
+    create_bull_repair,
     create_bull_researcher,
     create_conservative_debator,
     create_fundamentals_analyst,
@@ -15,6 +17,7 @@ from tradingagents.agents import (
     create_news_analyst,
     create_portfolio_manager,
     create_research_manager,
+    create_research_verifier,
     create_sentiment_analyst,
     create_trader,
 )
@@ -30,6 +33,10 @@ from .conditional_logic import ConditionalLogic
 DEBATE_PATH_MAP = {
     "Bull Researcher": "Bull Researcher",
     "Bear Researcher": "Bear Researcher",
+    "Research Verifier": "Research Verifier",
+}
+VERIFICATION_PATH_MAP = {
+    "Bull Repair": "Bull Repair",
     "Research Manager": "Research Manager",
 }
 RISK_ANALYSIS_PATH_MAP = {
@@ -84,6 +91,9 @@ class GraphSetup:
 
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
         bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
+        research_verifier_node = create_research_verifier(self.quick_thinking_llm)
+        bull_repair_node = create_bull_repair(self.quick_thinking_llm)
+        bear_repair_node = create_bear_repair(self.quick_thinking_llm)
         research_manager_node = create_research_manager(self.deep_thinking_llm)
         trader_node = create_trader(self.quick_thinking_llm)
 
@@ -102,6 +112,9 @@ class GraphSetup:
 
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
+        workflow.add_node("Research Verifier", research_verifier_node)
+        workflow.add_node("Bull Repair", bull_repair_node)
+        workflow.add_node("Bear Repair", bear_repair_node)
         workflow.add_node("Research Manager", research_manager_node)
         workflow.add_node("Trader", trader_node)
         workflow.add_node("Aggressive Analyst", aggressive_analyst)
@@ -131,6 +144,13 @@ class GraphSetup:
                 self.conditional_logic.should_continue_debate,
                 DEBATE_PATH_MAP,
             )
+        workflow.add_conditional_edges(
+            "Research Verifier",
+            self.conditional_logic.should_continue_verification,
+            VERIFICATION_PATH_MAP,
+        )
+        workflow.add_edge("Bull Repair", "Bear Repair")
+        workflow.add_edge("Bear Repair", "Research Verifier")
         workflow.add_edge("Research Manager", "Trader")
         workflow.add_edge("Trader", "Aggressive Analyst")
         # All three risk edges share the complete RISK_ANALYSIS_PATH_MAP (#1088).

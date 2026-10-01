@@ -1,20 +1,29 @@
+import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import typer
 
-from cli.display import console
+from cli.display import ANALYST_ORDER, console
 from cli.headless import (
+    format_duration,
     parse_analysts,
     parse_depth,
     parse_tickers,
     run_batch_analysis,
     run_single_analysis,
+    timestamped_echo,
 )
 from cli.run import run_analysis
 from tradingagents.backtest import iter_grid, run_backtest, summarize
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.portfolio import load_portfolio
+
+# Batch defaults so only --tickers/--tickers-file is required: each is an
+# explicit flag, then an env var, then a hardcoded fallback -- in that order.
+_DEFAULT_ANALYSTS = ",".join(ANALYST_ORDER)
+_DEFAULT_DEPTH = "medium"
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
 # the platform at import time), so gate on the platform rather than catching the
@@ -102,10 +111,11 @@ def run_non_interactive(
     ),
 ):
     """Run one analysis without interactive prompts."""
+    echo = timestamped_echo()
     try:
         _, depth_value = parse_depth(depth)
         analyst_names = parse_analysts(analysts)
-        typer.echo(f"Analysis date: {date}")
+        echo(f"Analysis date: {date}")
         result = run_single_analysis(
             ticker=ticker,
             analysis_date=date,
@@ -113,45 +123,100 @@ def run_non_interactive(
             depth_value=depth_value,
             language=language,
             output_dir=output_dir,
+            progress=echo,
+            progress_prefix=ticker,
         )
     except Exception as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        # A setup-time failure that never reached graph execution (bad config,
+        # invalid ticker, ...). A graph-execution failure does not raise here
+        # any more -- run_single_analysis already turned it into an "error"
+        # result with its partial artifacts intact, handled below.
+        echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    typer.echo(f"Completed {result['ticker']}")
-    typer.echo(f"Report: {output_dir.resolve() / 'complete_report.md'}")
-    typer.echo(f"Result: {output_dir.resolve() / 'result.json'}")
+
+    echo(f"Result: {output_dir.resolve() / 'result.json'}")
+    if result["status"] != "ok":
+        stage = result.get("failure_stage") or "unknown"
+        echo(f"FAILED at {stage} after {format_duration(result['run_duration_seconds'])}: {result['error']}", err=True)
+        if result.get("report_path"):
+            echo(f"Partial report: {output_dir.resolve() / result['report_path']}")
+        stats = result.get("stats") or {}
+        if stats:
+            echo(
+                f"LLM {stats.get('llm_calls', 0)}; tools {stats.get('tool_calls', 0)}; "
+                f"tokens {stats.get('tokens_in', 0)} in/{stats.get('tokens_out', 0)} out"
+            )
+        raise typer.Exit(code=1)
+
+    echo(f"Completed {result['ticker']}")
+    echo(f"Report: {output_dir.resolve() / 'complete_report.md'}")
+    stats = result["stats"]
+    research = result["research_execution"]
+    echo(
+        f"Summary: {format_duration(result['run_duration_seconds'])}; "
+        f"LLM {stats['llm_calls']}; tools {stats['tool_calls']}; "
+        f"tokens {stats['tokens_in']} in/{stats['tokens_out']} out; "
+        f"verifier {research['verification_status']} "
+        f"({research['verifier_passes']} pass(es), "
+        f"{research['repair_rounds']} repair(s))"
+    )
 
 
 @app.command("batch")
 def batch_non_interactive(
-    date: str = typer.Option(..., "--date", help="Analysis date, YYYY-MM-DD"),
-    analysts: str = typer.Option(
-        ..., "--analysts", help="Comma-separated analysts"
-    ),
-    depth: str = typer.Option(
-        ..., "--depth", help="Research depth: shallow, medium, or deep"
-    ),
-    language: str = typer.Option(..., "--language", help="Output language"),
-    output_dir: Path = typer.Option(  # noqa: B008 - Typer option declaration
-        ..., "--output-dir", help="Batch output directory"
-    ),
     tickers: str | None = typer.Option(
         None, "--tickers", help="Comma-separated ticker symbols"
     ),
     tickers_file: Path | None = typer.Option(  # noqa: B008 - Typer option declaration
         None, "--tickers-file", help="UTF-8 file with one ticker per line"
     ),
+    date: str | None = typer.Option(
+        None, "--date",
+        help="Analysis date, YYYY-MM-DD. Defaults to today (fixed at startup, so a "
+        "run crossing midnight stays on the day it started).",
+    ),
+    analysts: str | None = typer.Option(
+        None, "--analysts",
+        help="Comma-separated analysts. Defaults to $TRADINGAGENTS_ANALYSTS, or all four.",
+    ),
+    depth: str | None = typer.Option(
+        None, "--depth",
+        help="Research depth: shallow, medium, or deep. Defaults to $TRADINGAGENTS_DEPTH, "
+        "or medium.",
+    ),
+    language: str | None = typer.Option(
+        None, "--language",
+        help="Output language. Defaults to $TRADINGAGENTS_OUTPUT_LANGUAGE, or English.",
+    ),
+    output_dir: Path | None = typer.Option(  # noqa: B008 - Typer option declaration
+        None, "--output-dir", help=r"Batch output directory. Defaults to .\test\<date>."
+    ),
 ):
-    """Run multiple analyses sequentially without interactive prompts."""
+    """Run multiple analyses sequentially without interactive prompts.
+
+    Only --tickers (or --tickers-file) is required; every other option falls
+    back to an environment variable and then a hardcoded default.
+    """
+    echo = timestamped_echo()
+    date = date or datetime.now().strftime("%Y-%m-%d")
+    analysts = analysts or os.environ.get("TRADINGAGENTS_ANALYSTS") or _DEFAULT_ANALYSTS
+    depth = depth or os.environ.get("TRADINGAGENTS_DEPTH") or _DEFAULT_DEPTH
+    language = (
+        language
+        or os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE")
+        or DEFAULT_CONFIG["output_language"]
+    )
+    output_dir = output_dir or Path("test") / date
     try:
         depth_name, depth_value = parse_depth(depth)
         analyst_names = parse_analysts(analysts)
         ticker_names = parse_tickers(tickers, tickers_file)
     except (OSError, ValueError) as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    typer.echo(f"Analysis date: {date}")
+    echo(f"Analysis date: {date}")
+    echo(f"Output directory: {output_dir.resolve()}")
     try:
         results, summary_path, _ = run_batch_analysis(
             tickers=ticker_names,
@@ -161,18 +226,49 @@ def batch_non_interactive(
             depth_value=depth_value,
             language=language,
             output_dir=output_dir,
-            progress=typer.echo,
+            progress=echo,
         )
     except Exception as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
     successful = sum(result["status"] == "ok" for result in results)
     failed = len(results) - successful
-    typer.echo("Batch completed")
-    typer.echo(f"Successful: {successful}")
-    typer.echo(f"Failed: {failed}")
-    typer.echo(f"Summary: {summary_path}")
+    echo("Batch completed")
+    echo(f"Successful: {successful}")
+    echo(f"Failed: {failed}")
+    echo(f"Summary: {summary_path}")
+    successful_results = [result for result in results if result["status"] == "ok"]
+    total_stats = {
+        key: sum(result["stats"][key] for result in successful_results)
+        for key in ("llm_calls", "tool_calls", "tokens_in", "tokens_out")
+    }
+    total_research = {
+        key: sum(result["research_execution"][key] for result in successful_results)
+        for key in (
+            "bull_initial_calls",
+            "bear_initial_calls",
+            "bull_review_calls",
+            "bear_review_calls",
+            "verifier_passes",
+            "repair_rounds",
+        )
+    }
+    echo(
+        "Execution: "
+        f"elapsed {format_duration(sum(result['run_duration_seconds'] for result in results))}; "
+        f"LLM {total_stats['llm_calls']}; tools {total_stats['tool_calls']}; "
+        f"tokens {total_stats['tokens_in']} in/{total_stats['tokens_out']} out"
+    )
+    echo(
+        "Research calls: "
+        f"Bull initial {total_research['bull_initial_calls']}; "
+        f"Bear initial {total_research['bear_initial_calls']}; "
+        f"Bull reviews {total_research['bull_review_calls']}; "
+        f"Bear reviews {total_research['bear_review_calls']}; "
+        f"Verifier {total_research['verifier_passes']}; "
+        f"repairs {total_research['repair_rounds']}"
+    )
     if failed:
         raise typer.Exit(code=1)
 

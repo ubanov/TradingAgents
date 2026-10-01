@@ -16,6 +16,44 @@ class InvestDebateState(TypedDict):
     bull_rebuttal_count: Annotated[int, "Number of Bull cross-review calls"]
     bear_rebuttal_count: Annotated[int, "Number of Bear cross-review calls"]
     debate_round: Annotated[int, "Number of completed cross-review rounds"]
+    verification_history: Annotated[list[dict], "Structured verifier pass results"]
+    verifier_pass_count: Annotated[int, "Number of verifier calls"]
+    verification_status: Annotated[str, "Status of the latest verifier pass"]
+    verification_findings: Annotated[list[dict], "Findings from the latest verifier pass"]
+    repair_triggered: Annotated[bool, "Whether the bounded repair phase ran"]
+    repair_rounds: Annotated[int, "Number of completed repair rounds"]
+    repaired_agents: Annotated[list[str], "Research agents repaired"]
+    bull_repair: Annotated[str, "Bull's corrected final position"]
+    bear_repair: Annotated[str, "Bear's corrected final position"]
+    research_horizon: Annotated[str, "Shared analysis horizon used by both Bull and Bear"]
+    setup_tags: Annotated[dict, "Deterministic objective setup tags shared by Bull and Bear"]
+    atr_reference: Annotated[
+        float | None, "Deterministic ATR value shared by both sides' trade-metric calculations"
+    ]
+    bull_thesis: Annotated[dict, "Bull's current structured trade hypothesis"]
+    bear_thesis: Annotated[dict, "Bear's current structured trade hypothesis"]
+    bull_conviction_history: Annotated[list[int], "Bull's conviction score after each phase"]
+    bear_conviction_history: Annotated[list[int], "Bear's conviction score after each phase"]
+    bull_trade_metrics: Annotated[dict, "Deterministic trade metrics for Bull's current plan"]
+    bear_trade_metrics: Annotated[dict, "Deterministic trade metrics for Bear's current plan"]
+    new_data_exceptions: Annotated[list[dict], "NEW_DATA_EXCEPTION entries raised during review"]
+    withdrawn_values: Annotated[
+        list[float],
+        "Trade-plan levels WITHDRAWN or genuinely REVISED away during review or repair; "
+        "must never again be treated as active verified provenance",
+    ]
+    bull_repair_structured_status: Annotated[
+        str, "APPLIED/TEXT_ONLY/NOT_RUN: whether Bull's repair updated bull_thesis"
+    ]
+    bear_repair_structured_status: Annotated[
+        str, "APPLIED/TEXT_ONLY/NOT_RUN: whether Bear's repair updated bear_thesis"
+    ]
+    manager_integrity_status: Annotated[
+        str, "PASS/WARN from the deterministic post-manager integrity check"
+    ]
+    manager_integrity_findings: Annotated[
+        list[dict], "Findings from the deterministic post-manager integrity check"
+    ]
     bull_history: Annotated[
         str, "Bullish Conversation history"
     ]  # Bullish Conversation history
@@ -50,6 +88,15 @@ class RiskDebateState(TypedDict):
     current_neutral_response: Annotated[
         str, "Latest response by the neutral analyst"
     ]  # Last response
+    aggressive_risk_level: Annotated[
+        str, "Aggressive analyst's latest LOW/MEDIUM/HIGH assessment of the trader's plan"
+    ]
+    conservative_risk_level: Annotated[
+        str, "Conservative analyst's latest LOW/MEDIUM/HIGH assessment of the trader's plan"
+    ]
+    neutral_risk_level: Annotated[
+        str, "Neutral analyst's latest LOW/MEDIUM/HIGH assessment of the trader's plan"
+    ]
     judge_decision: Annotated[str, "Judge's decision"]
     count: Annotated[int, "Length of the current conversation"]  # Conversation length
 

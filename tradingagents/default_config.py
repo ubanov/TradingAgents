@@ -115,6 +115,11 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
+    # Shared analysis horizon for both Bull and Bear initial theses, so one
+    # side cannot independently pick a materially different holding window
+    # (e.g. Bull at 3 days, Bear at 3 months). A single fixed string for now;
+    # see fork README "Research horizon".
+    "research_horizon": "5-10 trading sessions",
     # News / data fetching parameters
     # Increase for longer lookback strategies or to broaden macro coverage;
     # decrease to reduce token usage in agent prompts.

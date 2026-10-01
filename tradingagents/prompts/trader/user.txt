@@ -5,7 +5,14 @@ Here is the research team's investment plan for {company_name}. {instrument_cont
 Proposed Investment Plan:
 {investment_plan}
 
-Make an informed, strategic trading decision.
+{integrity_notice}
+
+{research_trade_plan}
+
+Make an informed, strategic trading decision. Prefer the research team's entry/
+take-profit/stop-loss and deterministic metrics above over inventing your own
+levels from scratch; use the technical market report to refine or sanity-check
+them, not to replace them without reason.
 
 ## Output
 

@@ -1,6 +1,8 @@
 from typing import Any
 
 from tradingagents.agents.state import InvestDebateState, RiskDebateState
+from tradingagents.dataflows.config import get_config
+from tradingagents.default_config import DEFAULT_CONFIG
 
 
 class Propagator:
@@ -18,6 +20,8 @@ class Propagator:
         past_context: str = "",
         instrument_context: str = "",
         portfolio_context: str = "",
+        setup_tags: dict | None = None,
+        atr_reference: float | None = None,
     ) -> dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -26,6 +30,12 @@ class Propagator:
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
+
+        ``setup_tags``/``atr_reference`` are the deterministic objective setup
+        tags (see ``researchers/setup_tags.py``), likewise resolved once at run
+        start so Bull and Bear both see the identical values. Left empty/None
+        when the caller does not supply them (e.g. a bare unit test building
+        state directly), which never triggers a network call.
         """
         return {
             "messages": [("human", company_name)],
@@ -47,6 +57,32 @@ class Propagator:
                     "bull_rebuttal_count": 0,
                     "bear_rebuttal_count": 0,
                     "debate_round": 0,
+                    "verification_history": [],
+                    "verifier_pass_count": 0,
+                    "verification_status": "",
+                    "verification_findings": [],
+                    "repair_triggered": False,
+                    "repair_rounds": 0,
+                    "repaired_agents": [],
+                    "bull_repair": "",
+                    "bear_repair": "",
+                    "bull_repair_structured_status": "NOT_RUN",
+                    "bear_repair_structured_status": "NOT_RUN",
+                    "research_horizon": get_config().get(
+                        "research_horizon", DEFAULT_CONFIG["research_horizon"]
+                    ),
+                    "setup_tags": dict(setup_tags) if setup_tags else {},
+                    "atr_reference": atr_reference,
+                    "bull_thesis": {},
+                    "bear_thesis": {},
+                    "bull_conviction_history": [],
+                    "bear_conviction_history": [],
+                    "bull_trade_metrics": {},
+                    "bear_trade_metrics": {},
+                    "new_data_exceptions": [],
+                    "withdrawn_values": [],
+                    "manager_integrity_status": "",
+                    "manager_integrity_findings": [],
                     "bull_history": "",
                     "bear_history": "",
                     "history": "",
@@ -65,6 +101,9 @@ class Propagator:
                     "current_aggressive_response": "",
                     "current_conservative_response": "",
                     "current_neutral_response": "",
+                    "aggressive_risk_level": "",
+                    "conservative_risk_level": "",
+                    "neutral_risk_level": "",
                     "judge_decision": "",
                     "count": 0,
                 }

@@ -7,6 +7,13 @@ Key points to focus on:
 
 Develop an independent initial thesis using only the research below. No Bear argument or debate history is included in this phase.
 
+Commit to a structured trade hypothesis, not just prose: a direction, a self-assessed conviction score (evidence strength, not a probability), an entry level or range, a take-profit target, a stop-loss/invalidation level, and the shared analysis horizon below. Use only evidence already supplied here; state explicit data gaps instead of inventing numbers to fill them. The suggested risk unit is derived automatically from your conviction -- do not choose it yourself.
+
+Shared analysis horizon (use this exact horizon; do not pick your own): {research_horizon}
+
+Shared objective setup tags (deterministic, computed from market data; Bear receives the identical tags and may interpret them differently):
+{setup_tags}
+
 Resources available:
 {instrument_context}
 Market research report: {market_research_report}

@@ -15,7 +15,11 @@ from tradingagents.agents.context import (
     get_language_instruction,
     get_portfolio_context_from_state,
 )
-from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
+from tradingagents.agents.schemas import (
+    PortfolioDecision,
+    render_pm_decision,
+    render_risk_stance_summary,
+)
 from tradingagents.agents.structured import (
     NO_EXTERNAL_TOOLS,
     bind_structured,
@@ -52,6 +56,7 @@ def create_portfolio_manager(llm):
             trader_plan=trader_plan,
             lessons_line=lessons_line,
             history=history,
+            risk_stance_summary=render_risk_stance_summary(risk_debate_state),
             NO_EXTERNAL_TOOLS=NO_EXTERNAL_TOOLS,
         ) + get_language_instruction()
 
@@ -64,16 +69,9 @@ def create_portfolio_manager(llm):
         )
 
         new_risk_debate_state = {
+            **risk_debate_state,
             "judge_decision": final_trade_decision,
-            "history": risk_debate_state["history"],
-            "aggressive_history": risk_debate_state["aggressive_history"],
-            "conservative_history": risk_debate_state["conservative_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
             "latest_speaker": "Judge",
-            "current_aggressive_response": risk_debate_state["current_aggressive_response"],
-            "current_conservative_response": risk_debate_state["current_conservative_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
-            "count": risk_debate_state["count"],
         }
 
         return {

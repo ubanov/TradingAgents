@@ -5,10 +5,15 @@ from tradingagents.agents.context import (
     opponent_argument_or_opening,
     report_or_absent,
 )
+from tradingagents.agents.risk_mgmt.stance import invoke_risk_stance
+from tradingagents.agents.schemas import RiskStanceAssessment
+from tradingagents.agents.structured import bind_structured
 from tradingagents.prompts.loader import render_agent_prompt
 
 
 def create_aggressive_debator(llm):
+    structured_llm = bind_structured(llm, RiskStanceAssessment, "Aggressive Analyst")
+
     def aggressive_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
@@ -44,9 +49,11 @@ def create_aggressive_debator(llm):
             current_neutral_response=current_neutral_response,
         ) + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        rendered, risk_level = invoke_risk_stance(
+            structured_llm, llm, prompt, "Aggressive Analyst"
+        )
 
-        argument = f"Aggressive Analyst: {response.content}"
+        argument = f"Aggressive Analyst: {rendered}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,
@@ -59,6 +66,10 @@ def create_aggressive_debator(llm):
             "current_neutral_response": risk_debate_state.get(
                 "current_neutral_response", ""
             ),
+            "aggressive_risk_level": risk_level
+            or risk_debate_state.get("aggressive_risk_level", ""),
+            "conservative_risk_level": risk_debate_state.get("conservative_risk_level", ""),
+            "neutral_risk_level": risk_debate_state.get("neutral_risk_level", ""),
             "count": risk_debate_state["count"] + 1,
         }
 

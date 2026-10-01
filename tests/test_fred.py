@@ -14,6 +14,7 @@ import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
 from tradingagents.dataflows import router
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.errors import VendorRateLimitError
 from tradingagents.dataflows.vendors import fred
 
 # A small, stable set of observations to format against.
@@ -215,6 +216,22 @@ class FredRoutingTests(unittest.TestCase):
             out = router.route_to_vendor("get_macro_indicators", "cpi", "2026-06-01", 365)
         self.assertEqual(out, "MACRO_OK")
 
+    def test_rate_limited_fred_degrades_gracefully_like_other_vendors(self):
+        # A 429/5xx must route through OPTIONAL_CATEGORIES' degrade path
+        # (VendorRateLimitError), not abort with a generic HTTPError.
+        set_config({"data_vendors": {"macro_data": "fred"}})
+
+        def _throttled(*a, **k):
+            raise VendorRateLimitError("FRED request failed: 429 Too Many Requests")
+
+        with mock.patch.dict(
+            router.VENDOR_METHODS,
+            {"get_macro_indicators": {"fred": _throttled}},
+            clear=False,
+        ):
+            out = router.route_to_vendor("get_macro_indicators", "cpi", "2026-06-01", 365)
+        self.assertIn("DATA_UNAVAILABLE", out)
+
     def test_not_configured_degrades_gracefully(self):
         # macro_data is optional: with only fred and no key, the router degrades
         # to a sentinel instead of aborting the run — a missing optional key must
@@ -253,6 +270,9 @@ class TestKeyKeptOutOfErrors:
         return caught.value
 
     def test_http_error_message_carries_no_key(self):
+        # A 5xx/429 is now classified as VendorRateLimitError (router degrades
+        # macro data gracefully instead of treating it as a broken indicator);
+        # it must still carry no key, directly or through its chained cause.
         response = mock.Mock(status_code=502)
         response.raise_for_status.side_effect = requests.HTTPError(
             f"502 Server Error for url: https://api.stlouisfed.org/fred/series?api_key={_KEY}",
@@ -260,13 +280,15 @@ class TestKeyKeptOutOfErrors:
         )
         with mock.patch.dict("os.environ", {"FRED_API_KEY": _KEY}), \
              mock.patch("tradingagents.dataflows.net.requests.get", return_value=response), \
-             pytest.raises(requests.HTTPError) as caught:
+             pytest.raises(VendorRateLimitError) as caught:
             fred._request("series", {"series_id": "DGS10"})
         exc = caught.value
         assert _KEY not in str(exc) and _KEY not in repr(exc)
+        cause = exc.__cause__
+        assert isinstance(cause, requests.HTTPError)
+        assert _KEY not in str(cause) and _KEY not in repr(cause)
         # The response and request carry the full URL, so they are not attached.
-        assert exc.response is None and exc.request is None
-        assert exc.__cause__ is None and exc.__context__ is None  # no chain holds the key
+        assert cause.response is None and cause.request is None
 
     def test_connection_error_before_any_response_carries_no_key(self):
         exc = self._raises(requests.ConnectionError(

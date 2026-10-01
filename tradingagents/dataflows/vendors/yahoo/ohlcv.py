@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import uuid
 
 import pandas as pd
 import yfinance as yf
@@ -252,7 +253,14 @@ def load_ohlcv(symbol: str, curr_date: str, fill_gaps: bool = True) -> pd.DataFr
         # Only cache real data — never persist an empty frame.
         if downloaded.empty or "Close" not in downloaded.columns:
             raise_for_empty(symbol, canonical, "price rows")
-        downloaded.to_csv(data_file, index=False, encoding="utf-8")
+        # Atomic write: several graphs can run concurrently in one process
+        # (see dataflows/config.py) and each caches by symbol, so a plain
+        # to_csv() could let one process read a partially-written file, or
+        # two writers interleave. Write to a per-writer temp file, then
+        # rename — the same pattern sec_edgar.py uses for its own cache.
+        temp_file = f"{data_file}.{uuid.uuid4().hex}.tmp"
+        downloaded.to_csv(temp_file, index=False, encoding="utf-8")
+        os.replace(temp_file, data_file)
         data = downloaded
 
     data = _clean_dataframe(data)
