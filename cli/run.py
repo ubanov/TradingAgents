@@ -27,6 +27,7 @@ from cli.display import (
 )
 from cli.selections import get_user_selections
 from cli.stats_handler import StatsCallbackHandler
+from tradingagents.agents.fallback_log import fallback_count, reset_fallback_count
 from tradingagents.agents.rating import is_review
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -74,12 +75,13 @@ _ANALYST_STAGE_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
-def infer_failure_stage(final_state: dict[str, Any] | None, max_risk_discuss_rounds: int = 1) -> str:
+def infer_failure_stage(final_state: dict[str, Any] | None) -> str:
     """Best-effort guess at the furthest pipeline stage a failed run reached,
     from whatever partial state the stream yielded before the exception.
 
     Checked in reverse pipeline order so the LATEST reached stage wins: e.g. a
-    run whose risk discussion finished all its turns but never got a
+    run whose risk discussion finished all six turns (three independent
+    assessments, then the single cross-review round) but never got a
     Portfolio Manager decision failed AT Portfolio Manager, not somewhere
     earlier just because repair/verifier fields are also present.
 
@@ -95,7 +97,7 @@ def infer_failure_stage(final_state: dict[str, Any] | None, max_risk_discuss_rou
 
     if final_state.get("final_trade_decision") or risk.get("judge_decision"):
         return "complete"
-    if max_risk_discuss_rounds > 0 and risk.get("count", 0) >= 3 * max_risk_discuss_rounds:
+    if risk.get("neutral_review"):  # all six Risk turns done, no PM decision yet
         return "portfolio_manager"
     if risk.get("count", 0) > 0 or final_state.get("trader_investment_plan"):
         return "risk"
@@ -157,6 +159,7 @@ class AnalysisExecution:
     duration_seconds: float
     stats: dict[str, Any]
     graph: TradingAgentsGraph
+    fallback_warnings: int = 0
 
 
 def _run_directory(config: dict, ticker: str, trade_date: str) -> Path:
@@ -240,6 +243,9 @@ def execute_analysis(
     on_checkpoint: Callable[[TradingAgentsGraph], None] | None = None,
 ) -> AnalysisExecution:
     """Run one analysis through the shared interactive/headless execution path."""
+    # Per-ticker, not per-process: a batch run must not accumulate one running
+    # total across every ticker it processes.
+    reset_fallback_count()
     build_analyst_execution_plan(selected_analysts)
     stats_handler = stats_handler or StatsCallbackHandler()
     graph = TradingAgentsGraph(
@@ -294,7 +300,7 @@ def execute_analysis(
     stats = stats_handler.get_stats()
 
     if stream_error is not None:
-        failure_stage = infer_failure_stage(final_state, config.get("max_risk_discuss_rounds", 1))
+        failure_stage = infer_failure_stage(final_state)
         if failure_stage == "complete":
             # The graph itself finished; something after it (saving the
             # report, recording the decision) is what actually failed.
@@ -340,6 +346,7 @@ def execute_analysis(
         duration_seconds=duration_seconds,
         stats=stats,
         graph=graph,
+        fallback_warnings=fallback_count(),
     )
 
 

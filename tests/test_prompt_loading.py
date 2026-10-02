@@ -26,9 +26,12 @@ ROLE_PROMPTS = {
     "researchers/repair.txt": "You are repairing the final",
     "managers/research_manager.txt": "As the Research Manager and debate facilitator",
     "trader/system.txt": "You are a trading agent analyzing market data",
-    "risk_mgmt/aggressive.txt": "As the Aggressive Risk Analyst",
-    "risk_mgmt/conservative.txt": "As the Conservative Risk Analyst",
-    "risk_mgmt/neutral.txt": "As the Neutral Risk Analyst",
+    "risk_mgmt/aggressive_initial.txt": "You are the Opportunity / Underexposure Risk Reviewer",
+    "risk_mgmt/aggressive_review.txt": "You are the Opportunity / Underexposure Risk Reviewer",
+    "risk_mgmt/conservative_initial.txt": "You are the Downside / Tail / Execution Risk Reviewer",
+    "risk_mgmt/conservative_review.txt": "You are the Downside / Tail / Execution Risk Reviewer",
+    "risk_mgmt/neutral_initial.txt": "You are the Calibration / Consistency Risk Reviewer",
+    "risk_mgmt/neutral_review.txt": "You are the Calibration / Consistency Risk Reviewer",
     "managers/portfolio_manager.txt": "As the Portfolio Manager",
 }
 
@@ -175,8 +178,14 @@ def test_global_policy_and_role_text_are_present_after_loading(path, role_snippe
         research_plan="research",
         trader_plan="trader",
         risk_stance_summary="- Aggressive: LOW",
+        risk_integrity_notice="No unsupported claims detected.",
         lessons_line="",
         grounding="",
+        frozen_evidence="frozen evidence",
+        own_initial="own initial assessment",
+        aggressive_initial="aggressive initial",
+        conservative_initial="conservative initial",
+        neutral_initial="neutral initial",
     )
     assert load_global_policy().strip() in rendered
     assert role_snippet in rendered

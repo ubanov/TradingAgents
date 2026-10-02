@@ -95,6 +95,7 @@ class TestNullishFloatCoercion:
     def test_pm_nullish_price_target_coerces_to_none(self):
         d = PortfolioDecision(
             rating=PortfolioRating.OVERWEIGHT,
+            disposition="KEEP",
             executive_summary="s",
             investment_thesis="t",
             price_target="N/A",
@@ -639,7 +640,8 @@ def test_a_price_written_as_a_range_drops_only_that_field(written):
     losing every other field the model got right."""
     from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
 
-    decision = PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="s",
+    decision = PortfolioDecision(rating=PortfolioRating.BUY, disposition="KEEP",
+                                 executive_summary="s",
                                  investment_thesis="t", price_target=written)
     assert decision.price_target is None
 
@@ -648,7 +650,8 @@ def test_a_price_written_as_a_range_drops_only_that_field(written):
 def test_a_price_that_is_a_number_survives():
     from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
 
-    decision = PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="s",
+    decision = PortfolioDecision(rating=PortfolioRating.BUY, disposition="KEEP",
+                                 executive_summary="s",
                                  investment_thesis="t", price_target="$1,150.25")
     assert decision.price_target == 1150.25
 
@@ -659,7 +662,8 @@ def test_a_field_the_model_did_not_give_says_so():
     from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating, render_pm_decision
 
     rendered = render_pm_decision(PortfolioDecision(
-        rating=PortfolioRating.HOLD, executive_summary="s", investment_thesis="t"))
+        rating=PortfolioRating.HOLD, disposition="DEFER",
+        executive_summary="s", investment_thesis="t"))
     assert "Price Target" in rendered and "not provided" in rendered.lower()
 
 

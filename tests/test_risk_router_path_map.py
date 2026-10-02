@@ -6,6 +6,10 @@ return set is larger than any one edge previously mapped. Each edge now shares a
 complete path map (`RISK_ANALYSIS_PATH_MAP` / `DEBATE_PATH_MAP`), so a
 fall-through return can never hit a missing entry -- which would crash LangGraph
 mid-run on prompt/i18n/refactor drift in the speaker labels.
+
+`should_continue_risk_analysis` is phase-keyed (independent assessment, then
+one cross-review round), not a turn counter -- see
+``test_risk_independent_assessment.py`` for the phase-routing behavior itself.
 """
 import pytest
 
@@ -17,8 +21,29 @@ from tradingagents.graph.setup import (
 )
 
 
-def _state(latest_speaker, count=0):
-    return {"risk_debate_state": {"latest_speaker": latest_speaker, "count": count}}
+def _state(
+    latest_speaker="",
+    count=0,
+    *,
+    aggressive_initial="",
+    conservative_initial="",
+    neutral_initial="",
+    aggressive_review="",
+    conservative_review="",
+    neutral_review="",
+):
+    return {
+        "risk_debate_state": {
+            "latest_speaker": latest_speaker,
+            "count": count,
+            "aggressive_initial": aggressive_initial,
+            "conservative_initial": conservative_initial,
+            "neutral_initial": neutral_initial,
+            "aggressive_review": aggressive_review,
+            "conservative_review": conservative_review,
+            "neutral_review": neutral_review,
+        }
+    }
 
 
 def _debate_state(
@@ -58,20 +83,33 @@ def test_router_return_always_routable(latest_speaker):
 
 
 @pytest.mark.unit
-def test_router_terminates_at_round_limit():
+def test_router_terminates_once_all_six_turns_are_complete():
     logic = ConditionalLogic(max_risk_discuss_rounds=1)
-    # count >= 3 * rounds routes to the Portfolio Manager (debate ends)
-    assert logic.should_continue_risk_analysis(_state("Neutral", count=3)) == "Portfolio Manager"
+    all_done = _state(
+        aggressive_initial="a1", conservative_initial="c1", neutral_initial="n1",
+        aggressive_review="a2", conservative_review="c2", neutral_review="n2",
+    )
+    assert logic.should_continue_risk_analysis(all_done) == "Portfolio Manager"
 
 
 @pytest.mark.unit
 def test_path_map_covers_full_router_range():
     logic = ConditionalLogic(max_risk_discuss_rounds=1)
-    returns = {
-        logic.should_continue_risk_analysis(_state(s, c))
-        for s in ("Aggressive", "Conservative", "Neutral", "drift")
-        for c in (0, 99)
-    }
+    states = [
+        _state(),
+        _state(aggressive_initial="a1"),
+        _state(aggressive_initial="a1", conservative_initial="c1"),
+        _state(aggressive_initial="a1", conservative_initial="c1", neutral_initial="n1"),
+        _state(
+            aggressive_initial="a1", conservative_initial="c1", neutral_initial="n1",
+            aggressive_review="a2",
+        ),
+        _state(
+            aggressive_initial="a1", conservative_initial="c1", neutral_initial="n1",
+            aggressive_review="a2", conservative_review="c2", neutral_review="n2",
+        ),
+    ]
+    returns = {logic.should_continue_risk_analysis(s) for s in states}
     # Every value the router can emit is a key in the shared map...
     assert returns <= set(RISK_ANALYSIS_PATH_MAP)
     # ...and the terminal target is reachable.

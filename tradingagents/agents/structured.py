@@ -24,6 +24,8 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from tradingagents.agents.fallback_log import warn_fallback
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -48,10 +50,11 @@ def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
     try:
         return llm.with_structured_output(schema)
     except (NotImplementedError, AttributeError) as exc:
-        logger.warning(
-            "%s: provider does not support with_structured_output (%s); "
-            "falling back to free-text generation",
-            agent_name, exc,
+        warn_fallback(
+            logger,
+            f"{agent_name}: structured output unavailable; continuing with "
+            "free-text generation.",
+            detail=str(exc),
         )
         return None
 
@@ -80,9 +83,11 @@ def invoke_structured_or_freetext(
                 raise ValueError("structured output returned no parsed result")
             return render(result)
         except Exception as exc:
-            logger.warning(
-                "%s: structured-output invocation failed (%s); retrying once as free text",
-                agent_name, exc,
+            warn_fallback(
+                logger,
+                f"{agent_name}: structured output unavailable; retrying once "
+                "with free-text fallback.",
+                detail=str(exc),
             )
 
     response = plain_llm.invoke(prompt)

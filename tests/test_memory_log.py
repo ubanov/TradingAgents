@@ -97,6 +97,7 @@ def _structured_pm_llm(captured: dict, decision: PortfolioDecision | None = None
     if decision is None:
         decision = PortfolioDecision(
             rating=PortfolioRating.HOLD,
+            disposition="DEFER",
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
         )
@@ -783,6 +784,7 @@ class TestPortfolioManagerInjection:
         captured = {}
         decision = PortfolioDecision(
             rating=PortfolioRating.OVERWEIGHT,
+            disposition="KEEP",
             executive_summary="Build position gradually over the next two weeks.",
             investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
             price_target=215.0,

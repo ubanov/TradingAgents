@@ -12,6 +12,7 @@ from pathlib import Path
 from tradingagents.agents.managers.integrity_check import render_manager_integrity_report
 from tradingagents.agents.researchers.research_summary import render_research_context_summary
 from tradingagents.agents.researchers.verification import render_verification_history
+from tradingagents.agents.risk_mgmt.integrity_check import render_risk_integrity_report
 from tradingagents.agents.schemas import render_risk_stance_summary
 
 
@@ -124,6 +125,13 @@ def write_report_tree(
         risk_parts = []
         if any(risk.get(k) for k in ("aggressive_risk_level", "conservative_risk_level", "neutral_risk_level")):
             risk_parts.append(("Risk Stance Summary", render_risk_stance_summary(risk)))
+        if risk.get("risk_integrity_status"):
+            risk_parts.append((
+                "Risk Integrity Check",
+                render_risk_integrity_report(
+                    risk["risk_integrity_status"], risk.get("risk_integrity_findings", [])
+                ),
+            ))
         if risk.get("aggressive_history"):
             risk_dir.mkdir(exist_ok=True)
             (risk_dir / "aggressive.md").write_text(risk["aggressive_history"], encoding="utf-8")
@@ -145,7 +153,14 @@ def write_report_tree(
             portfolio_dir = save_path / "5_portfolio"
             portfolio_dir.mkdir(exist_ok=True)
             (portfolio_dir / "decision.md").write_text(risk["judge_decision"], encoding="utf-8")
-            sections.append(f"## V. Portfolio Manager Decision\n\n### Portfolio Manager\n{risk['judge_decision']}")
+            decision_text = risk["judge_decision"]
+            # The real structured/parsed disposition -- never derived from the
+            # rating (see fork README: "real PM disposition, not inferred").
+            disposition = risk.get("portfolio_disposition") or "not recorded"
+            sections.append(
+                f"## V. Portfolio Manager Decision\n\n### Portfolio Manager\n{decision_text}"
+                f"\n\n(Disposition: {disposition})"
+            )
 
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"

@@ -10,6 +10,7 @@ from tradingagents.agents.context import (
     get_language_instruction,
     report_or_absent,
 )
+from tradingagents.agents.fallback_log import warn_fallback
 from tradingagents.agents.researchers.trade_metrics import (
     render_trade_metrics,
     trade_metrics_from_dict,
@@ -36,9 +37,11 @@ def _parse_freetext_result(content: str) -> ResearchVerification:
     try:
         return ResearchVerification.model_validate(json.loads(text))
     except (json.JSONDecodeError, ValueError) as exc:
-        logger.warning(
-            "Research Verifier: free-text fallback was not valid structured JSON (%s)",
-            _brief_error(exc),
+        warn_fallback(
+            logger,
+            "Research Verifier: JSON fallback could not be validated; "
+            "continuing with WARN verification status.",
+            detail=_brief_error(exc),
         )
         return ResearchVerification(
             status=VerificationStatus.WARN,
@@ -96,10 +99,11 @@ def create_research_verifier(llm):
                 if result is None:
                     raise ValueError("structured output returned no parsed result")
             except Exception as exc:
-                logger.warning(
-                    "Research Verifier: structured-output invocation failed (%s); "
-                    "retrying once as JSON free text",
-                    _brief_error(exc),
+                warn_fallback(
+                    logger,
+                    "Research Verifier: structured output unavailable; "
+                    "retrying with JSON fallback.",
+                    detail=_brief_error(exc),
                 )
         if result is None:
             result = _parse_freetext_result(llm.invoke(prompt).content)

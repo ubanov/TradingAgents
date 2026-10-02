@@ -35,7 +35,8 @@ def test_missing_risk_level_keys_do_not_raise_building_the_prompt():
         def invoke(self, prompt):
             self.prompt = prompt
             return PortfolioDecision(
-                rating=PortfolioRating.HOLD, executive_summary="x", investment_thesis="y"
+                rating=PortfolioRating.HOLD, disposition="KEEP",
+                executive_summary="x", investment_thesis="y",
             )
 
     state = {
@@ -97,17 +98,17 @@ def test_risk_free_text_fallback_leaves_risk_level_as_empty_string_not_missing()
 @pytest.mark.unit
 def test_infer_failure_stage_portfolio_manager_when_all_risk_turns_done():
     final_state = {
-        "risk_debate_state": {"count": 9},
+        "risk_debate_state": {"count": 6, "neutral_review": "Neutral Reviewer (Cross-Review): ..."},
         "investment_debate_state": {"judge_decision": "plan"},
         "trader_investment_plan": "plan",
     }
-    assert infer_failure_stage(final_state, max_risk_discuss_rounds=3) == "portfolio_manager"
+    assert infer_failure_stage(final_state) == "portfolio_manager"
 
 
 @pytest.mark.unit
 def test_infer_failure_stage_risk_when_some_turns_done():
     final_state = {"risk_debate_state": {"count": 4}, "trader_investment_plan": "plan"}
-    assert infer_failure_stage(final_state, max_risk_discuss_rounds=3) == "risk"
+    assert infer_failure_stage(final_state) == "risk"
 
 
 @pytest.mark.unit
@@ -205,10 +206,18 @@ _FULL_STATE_BEFORE_PM = {
     "investment_plan": "Research Manager plan",
     "trader_investment_plan": "Trader plan",
     "risk_debate_state": {
-        "history": "risk history", "count": 9, "latest_speaker": "Neutral",
+        "history": "risk history", "count": 6, "latest_speaker": "Neutral",
         "aggressive_history": "agg", "conservative_history": "con", "neutral_history": "neu",
         "aggressive_risk_level": "LOW", "conservative_risk_level": "HIGH",
         "neutral_risk_level": "MEDIUM",
+        "aggressive_disposition": "KEEP", "conservative_disposition": "REDUCE_RISK",
+        "neutral_disposition": "KEEP",
+        "aggressive_initial": "Aggressive Reviewer (Independent Assessment): ...",
+        "conservative_initial": "Conservative Reviewer (Independent Assessment): ...",
+        "neutral_initial": "Neutral Reviewer (Independent Assessment): ...",
+        "aggressive_review": "Aggressive Reviewer (Cross-Review): ...",
+        "conservative_review": "Conservative Reviewer (Cross-Review): ...",
+        "neutral_review": "Neutral Reviewer (Cross-Review): ...",
         "current_aggressive_response": "", "current_conservative_response": "",
         "current_neutral_response": "",
         # Deliberately no judge_decision -- Portfolio Manager never completed.
@@ -295,7 +304,7 @@ def test_late_failure_raises_partial_execution_error_with_everything_preserved(f
     assert debate["manager_integrity_status"] == "WARN"
     assert debate["manager_integrity_findings"]
     assert exc.final_state["trader_investment_plan"] == "Trader plan"
-    assert risk["count"] == 9
+    assert risk["count"] == 6
     assert risk["aggressive_risk_level"] == "LOW"
     # 11: stats preserved even though the run failed.
     assert exc.stats["llm_calls"] == 38
@@ -322,7 +331,7 @@ def test_run_single_analysis_returns_error_result_instead_of_raising(fake_graph,
     assert result["failure_stage"] == "portfolio_manager"
     assert result["partial"]["research_manager_completed"] is True
     assert result["partial"]["trader_completed"] is True
-    assert result["partial"]["risk_discussion_turns"] == 9
+    assert result["partial"]["risk_discussion_turns"] == 6
     assert result["partial"]["manager_integrity_status"] == "WARN"
     assert result["report_path"] == "partial_report.md"
     assert (tmp_path / "result.json").exists()

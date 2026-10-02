@@ -41,7 +41,7 @@ def test_progress_reports_pipeline_stages_once(monkeypatch):
         "repair_rounds": 0,
         "judge_decision": "manager",
     }
-    risk = {"count": 3, "latest_speaker": "Neutral Analyst", "judge_decision": "pm"}
+    risk = {"count": 6, "latest_speaker": "Neutral Analyst", "judge_decision": "pm"}
     chunk = {
         "market_report": "market",
         "investment_debate_state": debate,
@@ -64,7 +64,7 @@ def test_progress_reports_pipeline_stages_once(monkeypatch):
         "requesting trader analysis",
         "trader completed",
         "requesting risk management discussion",
-        "risk discussion 3/3: Neutral Analyst",
+        "risk cross-review 6/6: Neutral Analyst",
         "requesting portfolio manager decision",
         "portfolio manager completed",
         "00:01:00",
@@ -172,6 +172,7 @@ def test_result_document_includes_research_agent_execution_counts(tmp_path):
         report_path=None,
         duration_seconds=12.5,
         stats={"llm_calls": 10, "tool_calls": 3, "tokens_in": 100, "tokens_out": 20},
+        fallback_warnings=0,
     )
 
     result = result_document(execution, tmp_path)
@@ -212,6 +213,7 @@ def test_result_document_parses_unlabelled_standalone_ratings_and_actions(tmp_pa
         report_path=None,
         duration_seconds=1.0,
         stats={"llm_calls": 1, "tool_calls": 0, "tokens_in": 1, "tokens_out": 1},
+        fallback_warnings=0,
     )
 
     result = result_document(execution, tmp_path)

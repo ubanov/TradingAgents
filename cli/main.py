@@ -148,7 +148,9 @@ def run_non_interactive(
             )
         raise typer.Exit(code=1)
 
-    echo(f"Completed {result['ticker']}")
+    fallback_warnings = result.get("fallback_warnings", 0)
+    suffix = f" (with {fallback_warnings} fallback warning(s))" if fallback_warnings else ""
+    echo(f"Completed {result['ticker']}{suffix}")
     echo(f"Report: {output_dir.resolve() / 'complete_report.md'}")
     stats = result["stats"]
     research = result["research_execution"]

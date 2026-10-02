@@ -205,8 +205,11 @@ class TestCheckpointSignature(unittest.TestCase):
         g.selected_analysts = ("market", "news")
         g.config = {"max_debate_rounds": 3, "max_risk_discuss_rounds": 1}
         self.assertNotEqual(base, g._run_signature("stock"))      # debate depth
+        # Risk is now a fixed independent-assessment-plus-cross-review structure,
+        # not scaled by max_risk_discuss_rounds, so changing it alone must NOT
+        # change the signature (no graph-shape difference to invalidate for).
         g.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 5}
-        self.assertNotEqual(base, g._run_signature("stock"))      # risk depth
+        self.assertEqual(base, g._run_signature("stock"))
         # Stable for identical inputs.
         g.config = {"max_debate_rounds": 1, "max_risk_discuss_rounds": 1}
         self.assertEqual(base, g._run_signature("stock"))

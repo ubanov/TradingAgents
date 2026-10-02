@@ -116,6 +116,9 @@ def render_trade_plan_for_trader(debate: dict) -> str:
         lines += [
             f"{side.title()} ({thesis.get('direction', '?')}):",
             f"  Entry: {_entry_text(thesis.get('entry'))}",
+            f"  Entry Reference (deterministic calculation, e.g. a range's midpoint -- "
+            "context only, NOT a silent substitute for the Entry above): "
+            f"{metrics.entry_reference if metrics.entry_reference is not None else 'N/A'}",
             f"  Take Profit: {thesis.get('take_profit') if thesis.get('take_profit') is not None else 'not set'}",
             f"  Stop Loss: {thesis.get('stop_loss') if thesis.get('stop_loss') is not None else 'not set'}",
             f"  Reward/Risk: {metrics.reward_risk if metrics.reward_risk is not None else 'N/A'}",

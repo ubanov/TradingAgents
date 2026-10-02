@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 
+from tradingagents.agents.fallback_log import warn_fallback
 from tradingagents.agents.researchers.trade_metrics import (
     compute_trade_metrics,
     entry_reference as _entry_reference,
@@ -45,9 +46,11 @@ def invoke_initial_thesis(structured_llm, plain_llm, prompt, agent_name: str):
                 result = InitialResearchThesis.model_validate(result)
             return render_initial_thesis(result), result.model_dump(mode="json")
         except Exception as exc:
-            logger.warning(
-                "%s: structured initial-thesis call failed (%s); falling back to free text",
-                agent_name, exc,
+            warn_fallback(
+                logger,
+                f"{agent_name}: structured initial thesis unavailable; "
+                "continuing with free-text fallback.",
+                detail=str(exc),
             )
     return plain_llm.invoke(prompt).content, None
 
@@ -63,9 +66,11 @@ def invoke_review(structured_llm, plain_llm, prompt, agent_name: str):
                 result = ResearchReviewOutcome.model_validate(result)
             return render_review_outcome(result), result.model_dump(mode="json")
         except Exception as exc:
-            logger.warning(
-                "%s: structured review call failed (%s); falling back to free text",
-                agent_name, exc,
+            warn_fallback(
+                logger,
+                f"{agent_name}: structured review unavailable; continuing "
+                "with free-text fallback.",
+                detail=str(exc),
             )
     return plain_llm.invoke(prompt).content, None
 

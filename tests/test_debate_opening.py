@@ -2,9 +2,14 @@
 
 Each debate round's opening speaker receives an empty opponent response; the
 prompt used to interpolate it into a "refute the opponent" instruction, so models
-fabricated the other side's position. All five debators (bull, bear, and the
-three risk analysts) now substitute an explicit opening marker when the opponent
-has not spoken, and pass a real argument through unchanged.
+fabricated the other side's position. Bull/Bear now substitute an explicit
+opening marker when the opponent has not spoken, and pass a real argument
+through unchanged.
+
+The three Risk reviewers no longer use this opponent/history mechanism at all
+(see fork README: "Risk as independent assessment + one cross-review") --
+their independence and cross-review properties are covered in
+``test_risk_independent_assessment.py`` instead.
 """
 from __future__ import annotations
 
@@ -15,9 +20,6 @@ import pytest
 from tradingagents.agents.context import opponent_argument_or_opening
 from tradingagents.agents.researchers.bear_researcher import create_bear_researcher
 from tradingagents.agents.researchers.bull_researcher import create_bull_researcher
-from tradingagents.agents.risk_mgmt.aggressive_debator import create_aggressive_debator
-from tradingagents.agents.risk_mgmt.conservative_debator import create_conservative_debator
-from tradingagents.agents.risk_mgmt.neutral_debator import create_neutral_debator
 
 _REPORTS = {
     "company_of_interest": "AAPL", "asset_type": "stock",
@@ -43,16 +45,6 @@ def _investment_state(current_response):
             "current_response": current_response, "count": 0,
         },
     }
-
-
-def _risk_state(**responses):
-    base = {
-        "current_aggressive_response": "", "current_conservative_response": "",
-        "current_neutral_response": "", "history": "", "aggressive_history": "",
-        "conservative_history": "", "neutral_history": "", "count": 0,
-    }
-    base.update(responses)
-    return {**_REPORTS, "trader_investment_plan": "plan", "risk_debate_state": base}
 
 
 # --- shared helper ----------------------------------------------------------
@@ -87,29 +79,3 @@ def test_researcher_passes_real_opponent_argument():
     })
     create_bull_researcher(_capturing_llm(captured))(state)
     assert "valuation is stretched" in captured["prompt"]
-
-
-# --- risk debators ----------------------------------------------------------
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "factory", [create_aggressive_debator, create_conservative_debator, create_neutral_debator]
-)
-def test_risk_opening_has_no_phantom_opponent(factory):
-    captured = {}
-    factory(_capturing_llm(captured))(_risk_state())
-    # Both opponent slots were empty -> two opening markers, no fabricated args.
-    assert captured["prompt"].count("has not spoken yet") == 2
-
-
-@pytest.mark.unit
-def test_risk_passes_real_opponent_arguments():
-    captured = {}
-    state = _risk_state(
-        current_conservative_response="Conservative Analyst: trim risk",
-        current_neutral_response="Neutral Analyst: hold steady",
-    )
-    create_aggressive_debator(_capturing_llm(captured))(state)
-    assert "trim risk" in captured["prompt"]
-    assert "hold steady" in captured["prompt"]
-    assert "has not spoken yet" not in captured["prompt"]

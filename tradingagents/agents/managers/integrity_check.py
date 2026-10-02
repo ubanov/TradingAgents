@@ -6,71 +6,44 @@ call: nothing stopped it from reintroducing a numeric threshold, sizing rule,
 or price level that was never in the verified evidence (observed in real
 runs -- a manager inventing a MACD-histogram threshold, a volume threshold, an
 allocation percentage, or a yield trigger that no analyst report, verified
-thesis, or deterministic calculation ever produced). This module closes that
-gap with one cheap, deterministic pass over the manager's rendered output,
-run after the Research Manager and before the Trader. No LLM call is made
-here, by design (see fork README: "Research Manager integrity check").
+thesis, or deterministic calculation ever produced; also a manager
+reintroducing a narrative claim Bull/Bear had already corrected during
+review, a reward/risk ratio inconsistent with the deterministic trade
+metrics, and a simple relational error such as stating one known price is
+below another when it is not). This module closes that gap with one cheap,
+deterministic pass over the manager's rendered output, run after the
+Research Manager and before the Trader. No LLM call is made here, by design
+(see fork README: "Research Manager integrity check").
+
+The numeric-extraction/sentence-scanning primitives are shared with the Risk
+integrity check (see ``tradingagents.agents.integrity_shared``) so the two do
+not drift apart on the same underlying logic.
 
 The check is intentionally narrow and conservative: false positives (a real,
 sourced number wrongly flagged) are worse than false negatives (a low-value
-new number that slips through). It:
-
-1. Collects every number already traceable to analyst evidence, a verified
-   Bull/Bear trade plan, or a deterministic calculation into one pool.
-2. Scans the manager's text for numbers that sit next to operational-trigger
-   language ("exceeds", "above", "reduce ... by", etc.) and flags any that
-   are not in that pool.
-3. Flags a withdrawn trade-plan level resurfacing verbatim.
-4. Flags conviction described as a forecast probability.
-
-It does not attempt to parse or verify arbitrary natural-language arithmetic;
-see ``ManagerFindingCategory`` for the full, fixed set of checks.
+new number that slips through). See ``ManagerFindingCategory`` for the full,
+fixed set of checks.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-# ---------------------------------------------------------------------------
-# Numeric extraction
-# ---------------------------------------------------------------------------
-
-# A number token: optional currency symbol, digits (with optional thousands
-# commas and a decimal part), optional %/K/M/B/T suffix. Deliberately simple --
-# this is for "does a number like this appear anywhere in the known-good
-# evidence", not a general-purpose numeric parser.
-_NUMBER_RE = re.compile(
-    r"[$€£]?(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+\.\d+|\d+)\s?(%|[KMBTkmbt])?(?![a-zA-Z0-9])"
+from tradingagents.agents.integrity_shared import (
+    LEVEL_WORDS,
+    PROBABILITY_WORDS,
+    SIZING_WORDS,
+    THRESHOLD_TRIGGERS,
+    excerpt,
+    extract_corrected_away_numbers,
+    extract_numbers,
+    find_arithmetic_errors,
+    find_numbers_near_triggers,
+    find_relational_errors,
+    find_withdrawn_values_reused,
+    split_sentences,
 )
-
-_SUFFIX_MULTIPLIER = {"k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}
-
-
-def extract_numbers(text: str) -> list[float]:
-    """Every number-like token in ``text``, normalised (K/M/B/T expanded)."""
-    numbers = []
-    for match in _NUMBER_RE.finditer(text or ""):
-        raw, suffix = match.group(1), match.group(2)
-        try:
-            value = float(raw.replace(",", ""))
-        except ValueError:
-            continue
-        if suffix and suffix.lower() in _SUFFIX_MULTIPLIER:
-            value *= _SUFFIX_MULTIPLIER[suffix.lower()]
-        numbers.append(value)
-    return numbers
-
-
-def _numbers_match(value: float, pool: list[float]) -> bool:
-    """Whether ``value`` is traceable to a number already in ``pool``.
-
-    A small tolerance absorbs rounding/formatting differences (the manager
-    writing "189.50" for a sourced "189.5"), not genuine new values.
-    """
-    return any(abs(value - known) <= max(0.01, abs(known) * 0.01) for known in pool)
-
 
 # ---------------------------------------------------------------------------
 # Known-good number pool
@@ -101,6 +74,16 @@ def build_known_number_pool(debate: dict, *reports: str) -> list[float]:
     return pool
 
 
+def _reward_risk_pool(debate: dict) -> list[float]:
+    ratios = []
+    for side in ("bull", "bear"):
+        metrics = debate.get(f"{side}_trade_metrics") or {}
+        ratio = metrics.get("reward_risk")
+        if isinstance(ratio, (int, float)) and not isinstance(ratio, bool):
+            ratios.append(float(ratio))
+    return ratios
+
+
 # ---------------------------------------------------------------------------
 # Finding categories and result
 # ---------------------------------------------------------------------------
@@ -116,6 +99,7 @@ class ManagerFindingCategory(str, Enum):
     NEW_UNSUPPORTED_LEVEL = "NEW_UNSUPPORTED_LEVEL"
     UNSUPPORTED_SIZING_RULE = "UNSUPPORTED_SIZING_RULE"
     ARITHMETIC_ERROR = "ARITHMETIC_ERROR"
+    RELATIONAL_ERROR = "RELATIONAL_ERROR"
     CONVICTION_AS_PROBABILITY = "CONVICTION_AS_PROBABILITY"
     WITHDRAWN_VALUE_REUSED = "WITHDRAWN_VALUE_REUSED"
     INTERNAL_INCONSISTENCY = "INTERNAL_INCONSISTENCY"
@@ -140,96 +124,54 @@ class ManagerIntegrityResult:
 # Sentence-level scanning
 # ---------------------------------------------------------------------------
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;\n])\s+")
-
-# Operational-trigger language: a number next to one of these is a candidate
-# decision rule, not narrative prose. Proximity (same sentence) is the whole
-# test -- deliberately not full NLP, per the "false positives are worse"
-# principle: a correctly-sourced number near one of these words still passes,
-# since the number itself is checked against the evidence pool below.
-_THRESHOLD_TRIGGERS = (
-    "exceed", "exceeds", "exceeding",
-    "above", "below", "over ", "under ",
-    "at least", "at most", "more than", "less than", "greater than", "fewer than",
-    "reduce", "increase", "cut ", "trim ",
-)
-
-_SIZING_WORDS = (
-    "allocat", "exposure", "position siz", "portfolio weight",
-    "of portfolio", "of the portfolio", "of capital",
-)
-
-_LEVEL_WORDS = (
-    "entry", "target", "stop", "take profit", "take-profit",
-    "invalidation", "trigger level", "price level",
-)
-
-_PROBABILITY_WORDS = ("probability", "chance of", "% chance", "likelihood", "odds of")
-
-
-def _split_sentences(text: str) -> list[str]:
-    return [s for s in _SENTENCE_SPLIT_RE.split(text or "") if s.strip()]
-
-
-def _excerpt(sentence: str, limit: int = 160) -> str:
-    sentence = sentence.strip()
-    return sentence if len(sentence) <= limit else sentence[: limit - 1].rstrip() + "…"
-
 
 def _classify_threshold(sentence_lower: str) -> ManagerFindingCategory:
-    if "%" in sentence_lower and any(word in sentence_lower for word in _SIZING_WORDS):
+    if "%" in sentence_lower and any(word in sentence_lower for word in SIZING_WORDS):
         return ManagerFindingCategory.UNSUPPORTED_SIZING_RULE
-    if any(word in sentence_lower for word in _LEVEL_WORDS):
+    if any(word in sentence_lower for word in LEVEL_WORDS):
         return ManagerFindingCategory.NEW_UNSUPPORTED_LEVEL
     return ManagerFindingCategory.NEW_UNSUPPORTED_THRESHOLD
 
 
 def _find_unsupported_thresholds(text: str, pool: list[float]) -> list[ManagerFinding]:
-    findings = []
-    for sentence in _split_sentences(text):
-        lower = sentence.lower()
-        if not any(trigger in lower for trigger in _THRESHOLD_TRIGGERS):
-            continue
-        for value in extract_numbers(sentence):
-            if _numbers_match(value, pool):
-                continue
-            category = _classify_threshold(lower)
-            findings.append(ManagerFinding(category.value, _excerpt(sentence)))
-    return findings
+    return [
+        ManagerFinding(_classify_threshold(sentence.lower()).value, sentence)
+        for sentence, _value in find_numbers_near_triggers(text, THRESHOLD_TRIGGERS, pool)
+    ]
 
 
 def _find_conviction_as_probability(text: str) -> list[ManagerFinding]:
     findings = []
-    for sentence in _split_sentences(text):
+    for sentence in split_sentences(text):
         lower = sentence.lower()
-        if "conviction" in lower and any(word in lower for word in _PROBABILITY_WORDS):
+        if "conviction" in lower and any(word in lower for word in PROBABILITY_WORDS):
             findings.append(
                 ManagerFinding(
-                    ManagerFindingCategory.CONVICTION_AS_PROBABILITY.value, _excerpt(sentence)
+                    ManagerFindingCategory.CONVICTION_AS_PROBABILITY.value, excerpt(sentence)
                 )
             )
     return findings
 
 
 def _find_withdrawn_values_reused(text: str, withdrawn_values: list[float]) -> list[ManagerFinding]:
-    """``withdrawn_values`` covers both a true WITHDRAW and a value a REVISE
-    genuinely replaced (see ``thesis_flow._retired_value_for``) -- either way,
-    it must never resurface as if it were still an active, verified level.
-    """
-    if not withdrawn_values:
-        return []
-    findings = []
-    for sentence in _split_sentences(text):
-        numbers = extract_numbers(sentence)
-        for withdrawn in withdrawn_values:
-            if any(abs(n - withdrawn) <= max(0.01, abs(withdrawn) * 0.001) for n in numbers):
-                findings.append(
-                    ManagerFinding(
-                        ManagerFindingCategory.WITHDRAWN_VALUE_REUSED.value,
-                        f"{_excerpt(sentence)} (level {withdrawn} was withdrawn during review)",
-                    )
-                )
-    return findings
+    return [
+        ManagerFinding(ManagerFindingCategory.WITHDRAWN_VALUE_REUSED.value, detail)
+        for detail in find_withdrawn_values_reused(text, withdrawn_values)
+    ]
+
+
+def _find_arithmetic_errors(text: str, debate: dict) -> list[ManagerFinding]:
+    return [
+        ManagerFinding(ManagerFindingCategory.ARITHMETIC_ERROR.value, sentence)
+        for sentence in find_arithmetic_errors(text, _reward_risk_pool(debate))
+    ]
+
+
+def _find_relational_errors(text: str) -> list[ManagerFinding]:
+    return [
+        ManagerFinding(ManagerFindingCategory.RELATIONAL_ERROR.value, sentence)
+        for sentence in find_relational_errors(text)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +180,10 @@ def _find_withdrawn_values_reused(text: str, withdrawn_values: list[float]) -> l
 
 
 def render_integrity_notice_for_trader(status: str, findings: list[dict]) -> str:
-    """A notice for the Trader's prompt when the manager's output carried
-    unsupported quantitative claims -- never silently rewritten (meaning could
-    change), always explicitly flagged as unsupported instead.
+    """A notice for a downstream prompt (Trader, or Risk's frozen evidence)
+    when the manager's output carried unsupported quantitative claims --
+    never silently rewritten (meaning could change), always explicitly
+    flagged as unsupported instead.
     """
     if status != ManagerCheckStatus.WARN.value or not findings:
         return ""
@@ -275,11 +218,16 @@ def check_manager_integrity(
     """
     text = manager_output_text or ""
     pool = build_known_number_pool(debate, *reports)
+    withdrawn = list(debate.get("withdrawn_values") or []) + extract_corrected_away_numbers(
+        (debate.get("review_outcomes") or "").split("\n")
+    )
 
     findings: list[ManagerFinding] = []
     findings += _find_unsupported_thresholds(text, pool)
     findings += _find_conviction_as_probability(text)
-    findings += _find_withdrawn_values_reused(text, debate.get("withdrawn_values") or [])
+    findings += _find_withdrawn_values_reused(text, withdrawn)
+    findings += _find_arithmetic_errors(text, debate)
+    findings += _find_relational_errors(text)
 
     status = ManagerCheckStatus.WARN if findings else ManagerCheckStatus.PASS
     return ManagerIntegrityResult(status=status.value, findings=findings)

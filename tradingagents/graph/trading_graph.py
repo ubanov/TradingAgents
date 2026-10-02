@@ -150,7 +150,11 @@ class TradingAgentsGraph:
             "analysts=" + ",".join(self.selected_analysts),
             "research_debate=structured-thesis-conviction-v1",
             f"debate={self.config['max_debate_rounds']}",
-            f"risk={self.config['max_risk_discuss_rounds']}",
+            # Fixed independent-assessment-then-cross-review structure, not scaled
+            # by max_risk_discuss_rounds any more -- versioned so an old checkpoint
+            # (different risk_debate_state shape) starts fresh instead of resuming
+            # into node code that expects the new fields.
+            "risk=independent-assessment-plus-cross-review-v1",
             f"asset={asset_type}",
             # None, an empty book and a changed book are three different runs.
             f"portfolio={portfolio.fingerprint() if portfolio is not None else 'none'}",

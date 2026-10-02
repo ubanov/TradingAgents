@@ -87,6 +87,7 @@ def test_portfolio_manager_prompt_states_constraint():
         captured,
         PortfolioDecision(
             rating=PortfolioRating.HOLD,
+            disposition="DEFER",
             executive_summary="x",
             investment_thesis="y",
         ),

@@ -231,6 +231,13 @@
   the research team's verified state, and is instructed to prefer those
   levels over inventing its own from the market report alone.
 
+- The Trader preserves a verified entry **range** as a range (`entry_price_low`
+  / `entry_price_high`) instead of being forced to collapse it into an
+  invented single execution price; a single verified entry stays a single
+  price. The deterministic midpoint above may still be cited explicitly as a
+  `reference_entry`, but only as a labelled calculation value, never silently
+  substituted for the actual entry/entry range.
+
 ### Suggested risk unit
 
 - Each side's thesis carries a `SUGGESTED_RISK_UNIT` (`NO_TRADE` / `LOW` /
@@ -277,18 +284,84 @@
   tradingagents batch --tickers NVDA,SPY,BTC-USD
   ```
 
-### Structured-output consistency in Risk Management
+### Risk as independent assessment, not a second debate
 
-- The three Risk Management debators (Aggressive, Conservative, Neutral) now
-  follow the same structured-output-with-free-text-fallback pattern already
-  used by the Trader, Research Manager, and Portfolio Manager, instead of
-  being the only free-text-only debate participants.
+Real validation runs (GLD, NVDA, SPY) showed the Risk phase behaving like a
+competitive debate rather than a review of the Trader's plan: Risk analysts
+defended an assigned role, introduced new thresholds, sizing rules, and
+historical analogies not present in the evidence, and sometimes spent later
+turns correcting claims they had invented themselves. The Risk phase was
+redesigned around one principle: **Risk evaluates the Trader's plan; it does
+not design a new one.**
 
-- Each turn still produces the same free-form conversational argument, but
-  now carries an explicit `risk_level` (`LOW`/`MEDIUM`/`HIGH`) alongside it:
-  that debator's own read of how risky the Trader's current plan is, not a
-  label for their assigned archetype. The latest reading from each analyst is
-  shown to the Portfolio Manager and in the saved report.
+- **Independent assessments, then one cross-review round.** The three Risk
+  reviewers (still Aggressive/Conservative/Neutral internally, reframed in
+  their prompts as Opportunity/Underexposure, Downside/Tail/Execution, and
+  Calibration/Consistency reviewers) each independently assess the frozen
+  Trader plan first, without seeing each other's output — mirroring the
+  Bull/Bear researchers' independent-initial-thesis phase. Exactly one
+  cross-review round follows, where each reviewer sees all three independent
+  assessments and may correct or withdraw its own claim, but introduces no
+  new evidence, thresholds, or levels. This replaces the previous
+  round-robin debate scaled by research depth (3/9/15 turns); the Risk phase
+  is now always six turns regardless of depth.
+
+- **Structured disposition, not free debate.** Each turn produces a
+  structured `RiskStanceAssessment`: a `risk_level`, a `disposition`
+  (`KEEP`/`DEFER`/`REDUCE_RISK`/`REJECT_PLAN`), supported points, unresolved
+  risks, corrected/withdrawn claims, unsupported claims noticed in another
+  reviewer's assessment, and a `plan_change_required` flag — never a new
+  entry/stop/target/threshold/sizing field. A reviewer that believes the plan
+  needs a change it cannot express with already-verified levels marks
+  `plan_change_required` and explains why, instead of inventing the
+  replacement.
+
+- **Frozen evidence set.** At the start of Risk, a fixed evidence bundle
+  (analyst reports, verified Bull/Bear structured state, the Research
+  Verifier's result, the Research Manager's plan with its integrity caveat,
+  deterministic setup tags and trade metrics, the Trader's plan, and known
+  data gaps) is assembled once; Risk reviewers may only cite this bundle, not
+  fetch or introduce new evidence.
+
+- **Deterministic Risk integrity check.** A new LLM-free pass runs after the
+  cross-review round and before Portfolio Manager, sharing its numeric/
+  sentence-scanning utilities with the Research Manager's integrity check
+  (now also wired up to catch a reward/risk ratio inconsistent with the
+  deterministic trade metrics, and a simple relational error such as stating
+  one known price is below another when it is not). It flags new unsupported
+  thresholds, levels, sizing/portfolio-percentage rules, historical claims,
+  probabilities, arithmetic/relational/unit errors, and a retired value or a
+  level contradicting the Trader's own plan — PASS/WARN only, no repair loop.
+
+- **Portfolio Manager provenance restrictions.** The Portfolio Manager now
+  receives the Risk integrity check's PASS/WARN result and findings
+  alongside the risk discussion, with an explicit instruction that Risk
+  arguments are assessments, not new evidence: it must not promote a number,
+  threshold, or claim introduced only during Risk unless it traces to the
+  frozen evidence or the Trader's own plan, and must preserve the Trader's
+  existing levels when a plan change is needed but no supported replacement
+  exists.
+
+- The three Risk reviewers still follow the same structured-output-with-
+  free-text-fallback pattern used by the Trader, Research Manager, and
+  Portfolio Manager.
+
+- **Portfolio Manager disposition is real structured state, not inferred from
+  the rating.** `rating` (Buy…Sell, the investment/directional view) and
+  `disposition` (`KEEP`/`DEFER`/`REDUCE_RISK`/`REJECT_PLAN`, what to do about
+  the Trader's plan as written) are independent fields the model sets
+  directly — a bullish rating can legitimately pair with `DEFER` or
+  `REDUCE_RISK` when the execution plan itself isn't ready. The previous
+  mechanical rating→disposition mapping has been removed; an unparsed
+  disposition is reported as "not recorded," never guessed from the rating.
+
+- Initial validation runs surfaced several Risk integrity false positives,
+  since tightened: a canonical replacement value a cent away from a retired
+  one is no longer treated as the same retired value; a percentage describing
+  a distance/change/share-of-profit near a price-level word is no longer
+  flagged as a unit error; and a comparison word (`above`/`below`/`exceeds`)
+  without accompanying conditional language (`if`/`when`/`requires`/...) is
+  treated as descriptive prose, not a new operational rule.
 
 ### Bug fixes
 
@@ -338,6 +411,17 @@ audit, applied on top of upstream behavior:
   `Rating:`/`Recommendation:` labels alike, instead of only one exact
   `**Label**: Value` shape; an output that still can't be parsed keeps its raw
   text and is marked `unparsed` rather than guessed at.
+- The Trader's action and the Research Manager's recommendation now also
+  recognize the Spanish labels `Acción`/`Recomendación` (with or without the
+  accent), so a Spanish-language run's `**Acción: Buy**` parses the same way
+  `**Action**: Buy` does instead of coming back `null`.
+- Expected, recoverable structured-output fallback (a provider falling back to
+  free text) now prints a concise `[WARN] ...` line on stdout instead of going
+  through `logging`'s default stderr path — under PowerShell, stderr from a
+  child process renders as a red `NativeCommandError` block, which trained
+  users to ignore red output even though the pipeline was continuing
+  normally. A genuine failure still surfaces through the existing
+  stderr/failure path unchanged.
 
 ## Planned experiments
 

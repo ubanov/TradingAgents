@@ -69,14 +69,14 @@ class InvestDebateState(TypedDict):
 # Risk management team state
 class RiskDebateState(TypedDict):
     aggressive_history: Annotated[
-        str, "Aggressive Agent's Conversation history"
-    ]  # Conversation history
+        str, "Aggressive reviewer's completed turns (independent + cross-review)"
+    ]
     conservative_history: Annotated[
-        str, "Conservative Agent's Conversation history"
-    ]  # Conversation history
+        str, "Conservative reviewer's completed turns (independent + cross-review)"
+    ]
     neutral_history: Annotated[
-        str, "Neutral Agent's Conversation history"
-    ]  # Conversation history
+        str, "Neutral reviewer's completed turns (independent + cross-review)"
+    ]
     history: Annotated[str, "Conversation history"]  # Conversation history
     latest_speaker: Annotated[str, "Analyst that spoke last"]
     current_aggressive_response: Annotated[
@@ -96,6 +96,63 @@ class RiskDebateState(TypedDict):
     ]
     neutral_risk_level: Annotated[
         str, "Neutral analyst's latest LOW/MEDIUM/HIGH assessment of the trader's plan"
+    ]
+    aggressive_disposition: Annotated[
+        str, "Aggressive reviewer's latest KEEP/DEFER/REDUCE_RISK/REJECT_PLAN disposition"
+    ]
+    conservative_disposition: Annotated[
+        str, "Conservative reviewer's latest KEEP/DEFER/REDUCE_RISK/REJECT_PLAN disposition"
+    ]
+    neutral_disposition: Annotated[
+        str, "Neutral reviewer's latest KEEP/DEFER/REDUCE_RISK/REJECT_PLAN disposition"
+    ]
+    aggressive_initial: Annotated[
+        str, "Aggressive reviewer's independent initial assessment text (completion marker for Phase A)"
+    ]
+    conservative_initial: Annotated[
+        str, "Conservative reviewer's independent initial assessment text (completion marker for Phase A)"
+    ]
+    neutral_initial: Annotated[
+        str, "Neutral reviewer's independent initial assessment text (completion marker for Phase A)"
+    ]
+    aggressive_review: Annotated[
+        str, "Aggressive reviewer's cross-review text (completion marker for Phase B)"
+    ]
+    conservative_review: Annotated[
+        str, "Conservative reviewer's cross-review text (completion marker for Phase B)"
+    ]
+    neutral_review: Annotated[
+        str, "Neutral reviewer's cross-review text (completion marker for Phase B)"
+    ]
+    aggressive_initial_assessment: Annotated[
+        dict, "Aggressive reviewer's structured Phase A RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    conservative_initial_assessment: Annotated[
+        dict, "Conservative reviewer's structured Phase A RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    neutral_initial_assessment: Annotated[
+        dict, "Neutral reviewer's structured Phase A RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    aggressive_review_assessment: Annotated[
+        dict, "Aggressive reviewer's structured Phase B RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    conservative_review_assessment: Annotated[
+        dict, "Conservative reviewer's structured Phase B RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    neutral_review_assessment: Annotated[
+        dict, "Neutral reviewer's structured Phase B RiskStanceAssessment, or {} on free-text fallback"
+    ]
+    risk_integrity_status: Annotated[
+        str, "PASS/WARN from the deterministic post-Risk integrity check"
+    ]
+    risk_integrity_findings: Annotated[
+        list[dict], "Findings from the deterministic post-Risk integrity check"
+    ]
+    portfolio_disposition: Annotated[
+        str,
+        "Portfolio Manager's real structured KEEP/DEFER/REDUCE_RISK/REJECT_PLAN decision "
+        "about the Trader plan -- a separate concept from the investment rating, never "
+        "derived from it. Empty string when unparsed/not produced, not guessed.",
     ]
     judge_decision: Annotated[str, "Judge's decision"]
     count: Annotated[int, "Length of the current conversation"]  # Conversation length

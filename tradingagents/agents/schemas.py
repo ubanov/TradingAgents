@@ -612,9 +612,11 @@ class ResearchPlan(BaseModel):
         description=(
             "The investment recommendation. Exactly one of Buy / Overweight / "
             "Hold / Underweight / Sell. Conflicting arguments alone are not a "
-            "reason to Hold: commit to the stronger side, sized by how "
-            "decisively it wins. Choose Hold only when the evidence is still "
-            "balanced after weighing, or too thin to support a call."
+            "reason to Hold: use the strength of the evidence only to select the "
+            "appropriate rating on this scale. Do not translate decisiveness into "
+            "portfolio size, allocation, leverage, or notional. Choose Hold only "
+            "when the evidence is still balanced after weighing, or too thin to "
+            "support a call."
         ),
     )
     rationale: str = Field(
@@ -626,10 +628,13 @@ class ResearchPlan(BaseModel):
     )
     strategic_actions: str = Field(
         description=(
-            "Concrete steps for the trader to implement the recommendation, "
-            "including sizing guidance relative to a standard allocation. The "
-            "research team does not see the caller's holdings; the trader and "
-            "portfolio manager apply the actual position."
+            "Concrete steps for the trader to implement the recommendation, using "
+            "the levels and deterministic metrics already computed above. The "
+            "research team does not see the caller's holdings and must not invent "
+            "a position-sizing percentage, notional amount, or portfolio-loss "
+            "tolerance -- actual position sizing is the trader/portfolio manager's "
+            "job, against the real portfolio context they have and this research "
+            "layer does not."
         ),
     )
 
@@ -671,9 +676,34 @@ class TraderProposal(BaseModel):
     entry_price: float | None = Field(
         default=None,
         description=(
-            "Optional entry price target as an absolute number in the instrument's "
-            "quote currency (e.g. 189.5), never a percentage or a range. Omit it "
-            "if you cannot state a specific level."
+            "Single absolute entry price in the instrument's quote currency (e.g. 189.5), "
+            "never a percentage. Use this ONLY when the verified research plan's entry is "
+            "itself a single point (or you are deliberately picking one specific level). "
+            "When the verified plan's entry is a RANGE, leave this unset and use "
+            "entry_price_low/entry_price_high instead -- do not collapse a verified range "
+            "into an invented single price here. Omit entirely if you cannot state a level."
+        ),
+    )
+    entry_price_low: float | None = Field(
+        default=None,
+        description=(
+            "Lower bound of a verified entry RANGE, as an absolute price. Set this (with "
+            "entry_price_high) only when the verified research plan's entry is itself a "
+            "range; do not invent a range when the verified plan has a single entry."
+        ),
+    )
+    entry_price_high: float | None = Field(
+        default=None,
+        description="Upper bound of a verified entry RANGE; see entry_price_low.",
+    )
+    reference_entry: float | None = Field(
+        default=None,
+        description=(
+            "Optional: the deterministic reference entry already computed in code (e.g. "
+            "the midpoint of a range) if you want to cite it explicitly as a calculation. "
+            "This is context, never a silent substitute for the actual entry/entry range "
+            "above -- do not average a range into this unless the verified plan explicitly "
+            "asks for that calculation."
         ),
     )
     stop_loss: float | None = Field(
@@ -686,10 +716,19 @@ class TraderProposal(BaseModel):
     )
     position_sizing: str | None = Field(
         default=None,
-        description="Optional sizing guidance, e.g. '5% of portfolio'.",
+        description=(
+            "Optional sizing guidance. State a concrete percentage or notional "
+            "amount ONLY if the supplied portfolio context gives the denominator "
+            "(actual holdings/cash) needed to compute it; otherwise state that "
+            "sizing is unknown/not determinable rather than inventing a figure. "
+            "LOW/MEDIUM/HIGH research risk classification is not a position size."
+        ),
     )
 
-    @field_validator("entry_price", "stop_loss", mode="before")
+    @field_validator(
+        "entry_price", "entry_price_low", "entry_price_high", "reference_entry", "stop_loss",
+        mode="before",
+    )
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -707,10 +746,22 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         "",
         f"**Reasoning**: {proposal.reasoning}",
     ]
+    # A verified range stays a range (both bounds), never collapsed into an
+    # invented midpoint; a single verified/chosen entry stays a single price.
+    if proposal.entry_price_low is not None or proposal.entry_price_high is not None:
+        low = proposal.entry_price_low if proposal.entry_price_low is not None else "?"
+        high = proposal.entry_price_high if proposal.entry_price_high is not None else "?"
+        entry_text = f"{low} - {high}"
+    elif proposal.entry_price is not None:
+        entry_text = proposal.entry_price
+    else:
+        entry_text = "not provided"
+    parts.extend(["", f"**Entry Price**: {entry_text}"])
+    if proposal.reference_entry is not None:
+        parts.extend(["", f"**Reference Entry (calculated)**: {proposal.reference_entry}"])
     # Named even when absent, so a reader can tell a level the trader chose not
     # to give from one the schema never asked for.
-    for label, value in (("Entry Price", proposal.entry_price),
-                         ("Stop Loss", proposal.stop_loss),
+    for label, value in (("Stop Loss", proposal.stop_loss),
                          ("Position Sizing", proposal.position_sizing)):
         parts.extend(["", f"**{label}**: {value if value is not None and value != '' else 'not provided'}"])
     parts.extend([
@@ -725,6 +776,19 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
 # ---------------------------------------------------------------------------
 
 
+class RiskDisposition(str, Enum):
+    """A disposition toward the frozen Trader plan -- never a replacement plan
+    of its own. Used both by each Risk reviewer's own assessment and by the
+    Portfolio Manager's final decision about the Trader's plan specifically
+    (a separate concept from ``PortfolioRating``, the investment/directional
+    view -- see ``PortfolioDecision.disposition``)."""
+
+    KEEP = "KEEP"
+    DEFER = "DEFER"
+    REDUCE_RISK = "REDUCE_RISK"
+    REJECT_PLAN = "REJECT_PLAN"
+
+
 class PortfolioDecision(BaseModel):
     """Structured output produced by the Portfolio Manager.
 
@@ -736,18 +800,39 @@ class PortfolioDecision(BaseModel):
 
     rating: PortfolioRating = Field(
         description=(
-            "The final position rating. Exactly one of Buy / Overweight / Hold / "
-            "Underweight / Sell, picked based on the analysts' debate. "
-            "Conflicting arguments alone are not a reason to Hold: commit to the "
-            "stronger side, sized by how decisively it wins. Choose Hold only "
-            "when the evidence is still balanced after weighing, or too thin to "
-            "support a call."
+            "The final position rating: the investment / directional allocation "
+            "view. Exactly one of Buy / Overweight / Hold / Underweight / Sell, "
+            "picked based on the analysts' debate. Conflicting arguments alone "
+            "are not a reason to Hold: use the strength of the evidence only to "
+            "select the appropriate rating on this scale. Do not translate "
+            "decisiveness into portfolio size, allocation, leverage, or notional. "
+            "Choose Hold only when the evidence is still balanced after "
+            "weighing, or too thin to support a call."
+        ),
+    )
+    disposition: RiskDisposition = Field(
+        description=(
+            "What you decide about the TRADER'S PLAN AS CURRENTLY WRITTEN -- a "
+            "separate concept from `rating` (the investment view), not derived "
+            "from it. KEEP: execute the plan as written. DEFER: hold the "
+            "investment view but do not execute this plan yet (wait for more "
+            "evidence or a repaired plan). REDUCE_RISK: the plan is directionally "
+            "sound but needs less size or tighter protection before executing. "
+            "REJECT_PLAN: this plan should not be executed as proposed. A "
+            "bullish `rating` can still pair with DEFER or REDUCE_RISK -- e.g. "
+            "Overweight+DEFER means a favorable view but do not execute the "
+            "current plan until it is repaired; Overweight+REDUCE_RISK means a "
+            "favorable view but this specific execution plan needs less risk. "
+            "Set this from your own judgment of the plan's executability, never "
+            "by mechanically mapping it from `rating`."
         ),
     )
     executive_summary: str = Field(
         description=(
-            "A concise action plan covering entry strategy, position sizing, "
-            "key risk levels, and time horizon. Two to four sentences."
+            "A concise action plan covering entry strategy, key risk levels, and time "
+            "horizon. Two to four sentences. State position sizing only if the supplied "
+            "portfolio context gives the actual holdings/cash needed to compute it; "
+            "otherwise do not invent a percentage or notional amount."
         ),
     )
     investment_thesis: str = Field(
@@ -783,6 +868,8 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     parts = [
         f"**Rating**: {decision.rating.value}",
         "",
+        f"**Disposition**: {decision.disposition.value}",
+        "",
         f"**Executive Summary**: {decision.executive_summary}",
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
@@ -801,50 +888,121 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
 
 
 class RiskStanceAssessment(BaseModel):
-    """Structured output for one Risk Management debator's turn.
+    """Structured output for one Risk reviewer's independent assessment or
+    cross-review of the frozen Trader plan.
 
-    Mirrors the Trader/Research Manager/Portfolio Manager pattern: the
-    conversational debate argument is still free prose (``argument``), but a
-    small structured signal (``risk_level``) rides alongside it instead of
-    being left implicit in the text, the way Bull/Bear conviction rides
-    alongside their prose. Falls back to free text exactly like those agents
-    when a provider does not support structured output.
+    Risk reviewers evaluate the plan; they do not design a new one. There is
+    deliberately no field for a new entry/stop/target/threshold/sizing
+    percentage here -- see ``plan_change_required`` for what to do instead
+    when the plan genuinely needs a change that cannot be expressed with
+    already-verified levels.
     """
 
     risk_level: Literal["LOW", "MEDIUM", "HIGH"] = Field(
         description=(
-            "This analyst's own assessment of how risky the TRADER's current "
+            "This reviewer's own assessment of how risky the TRADER's current "
             "plan is, from their assigned perspective -- not a label for "
-            "their own archetype (an Aggressive analyst can still rate the "
-            "plan LOW if it is too timid for their taste)."
+            "their own archetype."
         )
     )
-    argument: str = Field(
+    disposition: RiskDisposition = Field(
         description=(
-            "The full conversational rebuttal/argument for this turn, addressing "
-            "the other analysts' latest points directly. Speak naturally, as "
-            "instructed, with no special formatting."
+            "Recommended disposition toward the Trader's plan: KEEP (no change "
+            "needed), DEFER (wait -- evidence is not yet sufficient either way), "
+            "REDUCE_RISK (directionally sound but oversized or under-protected), "
+            "or REJECT_PLAN (should not be taken as proposed). Not a vote; a "
+            "reviewer may conclude KEEP even from a cautious perspective, or "
+            "REJECT_PLAN even from an opportunity-seeking one."
         )
     )
+    supported_points: list[str] = Field(
+        default_factory=list,
+        description="Specific points from the frozen evidence or Trader plan this reviewer finds well supported.",
+    )
+    unresolved_risks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Risks identified in the frozen evidence, each prefixed with exactly one of "
+            "IDENTIFIED_RISK / ALREADY_CONTROLLED / UNRESOLVED / PLAN_CHANGE_REQUIRED. "
+            "Do not default to PLAN_CHANGE_REQUIRED merely to seem thorough."
+        ),
+    )
+    corrected_or_withdrawn_claims: list[str] = Field(
+        default_factory=list,
+        description="A claim this reviewer is correcting or withdrawing from their own earlier turn this run, if any.",
+    )
+    unsupported_claims_seen: list[str] = Field(
+        default_factory=list,
+        description=(
+            "A specific unsupported number, threshold, sizing rule, historical analogy, or "
+            "probability noticed in another reviewer's assessment during cross-review -- "
+            "named so it is not silently repeated as if it were valid. Empty during the "
+            "independent phase, when no other assessment is visible yet."
+        ),
+    )
+    plan_change_required: bool = Field(
+        default=False,
+        description=(
+            "True only when the Trader plan needs a change that cannot be expressed using "
+            "already-verified levels. When true, explain why in rationale rather than "
+            "inventing the replacement level yourself."
+        ),
+    )
+    rationale: str = Field(
+        description="Concise rationale, 1-3 sentences. No rhetoric, no restating the full case."
+    )
+
+    @field_validator(
+        "supported_points", "unresolved_risks", "corrected_or_withdrawn_claims",
+        "unsupported_claims_seen",
+        mode="before",
+    )
+    @classmethod
+    def _normalise_text_list(cls, value):
+        return [_verification_text(item) for item in _coerce_str_list(value)]
 
 
-def render_risk_argument(assessment: RiskStanceAssessment) -> str:
-    """The prose argument only; ``risk_level`` is tracked separately in debate
-    state (see ``RiskDebateState``) so the transcript's shape is unchanged."""
-    return assessment.argument
+def render_risk_assessment(assessment: RiskStanceAssessment) -> str:
+    """Render one Risk reviewer's structured turn to readable markdown.
+
+    Composes a full-text block from the structured fields (no separate prose
+    "argument" blob) so the saved report keeps full text for audit while the
+    structure itself keeps the model from inventing a new trading system
+    inside free-form rhetoric.
+    """
+    lines = [
+        f"Risk level: {assessment.risk_level}",
+        f"Disposition: {assessment.disposition.value}",
+    ]
+    if assessment.supported_points:
+        lines += ["Supported points:"] + [f"- {item}" for item in assessment.supported_points]
+    if assessment.unresolved_risks:
+        lines += ["Risks:"] + [f"- {item}" for item in assessment.unresolved_risks]
+    if assessment.corrected_or_withdrawn_claims:
+        lines += ["Corrected/withdrawn:"] + [
+            f"- {item}" for item in assessment.corrected_or_withdrawn_claims
+        ]
+    if assessment.unsupported_claims_seen:
+        lines += ["Unsupported claims seen in other assessments:"] + [
+            f"- {item}" for item in assessment.unsupported_claims_seen
+        ]
+    lines.append(f"Plan change required: {'yes' if assessment.plan_change_required else 'no'}")
+    lines.append(f"Rationale: {assessment.rationale}")
+    return "\n".join(lines)
 
 
 def render_risk_stance_summary(risk_debate_state: dict) -> str:
-    """Each risk debator's latest LOW/MEDIUM/HIGH read of the trader's plan,
-    for the Portfolio Manager prompt and the saved report."""
+    """Each risk reviewer's latest LOW/MEDIUM/HIGH level and disposition, for
+    the Portfolio Manager prompt and the saved report."""
     lines = []
-    for label, key in (
-        ("Aggressive", "aggressive_risk_level"),
-        ("Conservative", "conservative_risk_level"),
-        ("Neutral", "neutral_risk_level"),
+    for label, level_key, disposition_key in (
+        ("Aggressive", "aggressive_risk_level", "aggressive_disposition"),
+        ("Conservative", "conservative_risk_level", "conservative_disposition"),
+        ("Neutral", "neutral_risk_level", "neutral_disposition"),
     ):
-        level = risk_debate_state.get(key) or "not recorded"
-        lines.append(f"- {label}: {level}")
+        level = risk_debate_state.get(level_key) or "not recorded"
+        disposition = risk_debate_state.get(disposition_key) or "not recorded"
+        lines.append(f"- {label}: risk={level}, disposition={disposition}")
     return "\n".join(lines)
 
 

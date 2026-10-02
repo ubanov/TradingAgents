@@ -142,3 +142,61 @@ def test_build_known_number_pool_covers_reports_theses_and_metrics():
 def test_empty_manager_output_and_empty_debate_do_not_crash():
     result = check_manager_integrity("", {}, "", "", "", "")
     assert result.status == "PASS"
+
+
+@pytest.mark.unit
+def test_manager_reusing_a_claim_bull_bear_already_corrected_warns():
+    """Real-run example (NVDA): Bull/Bear corrected a flawed '-8.8% normalized
+    sequential profit' claim to approximately '+18.2%' during review; the
+    Research Manager later reintroduced the retired -8.8% figure. Sign-aware
+    reuse detection lives in ``extract_signed_numbers``/
+    ``find_withdrawn_values_reused`` (see test_signed_withdrawn_values.py)."""
+    debate = _debate(
+        review_outcomes=(
+            "ACCEPTED: normalized profit growth\n\n**Arithmetic Corrections**:\n"
+            "- -8.8% normalized sequential decline corrected to +18.2% using consistent "
+            "quarter-over-quarter normalization\n"
+        ),
+    )
+    manager_text = "The normalized profit declined -8.8% sequentially, which is a concern."
+    result = check_manager_integrity(manager_text, debate, "", "", "", "")
+    assert result.status == "WARN"
+    assert any(
+        f.category == ManagerFindingCategory.WITHDRAWN_VALUE_REUSED.value for f in result.findings
+    )
+
+
+@pytest.mark.unit
+def test_manager_reward_risk_inconsistent_with_deterministic_metrics_warns():
+    """Real-run example (SPY): Manager stated an R/R of 1.59:1 for levels
+    whose deterministic reward_risk is approximately 1.00."""
+    debate = _debate(bull_trade_metrics={"reward_risk": 1.00})
+    manager_text = "The Bull setup offers an R/R of 1.59:1 given the proposed levels."
+    result = check_manager_integrity(manager_text, debate, "", "", "", "")
+    assert result.status == "WARN"
+    assert any(
+        f.category == ManagerFindingCategory.ARITHMETIC_ERROR.value for f in result.findings
+    )
+
+
+@pytest.mark.unit
+def test_manager_relational_comparison_error_warns():
+    """Real-run example (NVDA): a relational error equivalent to saying
+    216.48 is below 199.81."""
+    manager_text = "The current price of 216.48 is below the prior resistance of 199.81."
+    result = check_manager_integrity(manager_text, _debate(), "", "", "", "")
+    assert result.status == "WARN"
+    assert any(
+        f.category == ManagerFindingCategory.RELATIONAL_ERROR.value for f in result.findings
+    )
+
+
+@pytest.mark.unit
+def test_manager_consistent_structured_arithmetic_and_relations_pass():
+    debate = _debate(bull_trade_metrics={"reward_risk": 1.78})
+    manager_text = (
+        "The reward/risk ratio of 1.78:1 is attractive, and the current price of 199.81 "
+        "is below the prior resistance of 216.48."
+    )
+    result = check_manager_integrity(manager_text, debate, "", "", "", "")
+    assert result.status == "PASS"

@@ -1,12 +1,24 @@
 from tradingagents.agents.researchers.verification import MAX_REPAIR_ROUNDS
 from tradingagents.agents.state import AgentState
 
+# Risk is a fixed two-phase structure -- three independent assessments, then
+# exactly one cross-review round -- not a round count scaled by research
+# depth (see fork README: "Risk as independent assessment + one cross-
+# review"). Three reviewers x two phases = six turns, always.
+RISK_ANALYSIS_TOTAL_TURNS = 6
+
 
 class ConditionalLogic:
     """Handles conditional logic for determining graph flow."""
 
     def __init__(self, max_debate_rounds=1, max_risk_discuss_rounds=1):
-        """Initialize with configuration parameters."""
+        """Initialize with configuration parameters.
+
+        ``max_risk_discuss_rounds`` is accepted for backward compatibility
+        (config plumbing, CLI depth mapping) but no longer scales the Risk
+        phase, which is now a fixed independent-assessment-then-cross-review
+        structure regardless of research depth.
+        """
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
@@ -35,13 +47,24 @@ class ConditionalLogic:
         return "Research Manager"
 
     def should_continue_risk_analysis(self, state: AgentState) -> str:
-        """Determine if risk analysis should continue."""
-        if (
-            state["risk_debate_state"]["count"] >= 3 * self.max_risk_discuss_rounds
-        ):  # 3 rounds of back-and-forth between 3 agents
-            return "Portfolio Manager"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Aggressive"):
+        """Route independent assessments, then exactly one cross-review round.
+
+        Phase-keyed like ``should_continue_debate``, not a turn counter: each
+        reviewer's own completion marker (``{role}_initial`` / ``{role}_review``)
+        decides the next node, so a free-text-fallback turn (whose structured
+        assessment is empty) still counts as complete.
+        """
+        risk = state["risk_debate_state"]
+        if not risk.get("aggressive_initial"):
+            return "Aggressive Analyst"
+        if not risk.get("conservative_initial"):
             return "Conservative Analyst"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Conservative"):
+        if not risk.get("neutral_initial"):
             return "Neutral Analyst"
-        return "Aggressive Analyst"
+        if not risk.get("aggressive_review"):
+            return "Aggressive Analyst"
+        if not risk.get("conservative_review"):
+            return "Conservative Analyst"
+        if not risk.get("neutral_review"):
+            return "Neutral Analyst"
+        return "Portfolio Manager"

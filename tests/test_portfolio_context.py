@@ -189,13 +189,14 @@ def test_completed_run_clears_the_checkpoint_it_wrote(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
-def test_research_layer_sizes_against_a_standard_allocation():
-    """The research team is blind to the book, so its plan cannot promise
-    position-relative sizing: it sizes against a standard allocation instead."""
+def test_research_layer_does_not_invent_position_sizing():
+    """The research team is blind to the book, so it must not invent sizing
+    (a percentage, notional, or loss tolerance) -- that is the trader/
+    portfolio manager's job against the real portfolio context."""
     from tradingagents.agents.schemas import ResearchPlan
 
     description = ResearchPlan.model_fields["strategic_actions"].description
-    assert "standard allocation" in description
+    assert "must not invent a position-sizing percentage" in description
     assert "does not see the caller's holdings" in description
 
 

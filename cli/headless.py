@@ -25,6 +25,7 @@ from cli.stats_handler import StatsCallbackHandler
 from tradingagents.agents.rating import RATINGS_5_TIER, extract_choice, is_review
 from tradingagents.dataflows.symbols import safe_ticker_component
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.graph.conditional_logic import RISK_ANALYSIS_TOTAL_TURNS
 from tradingagents.graph.trading_graph import _validate_trade_date
 
 DEPTH_SELECTIONS = {"shallow": 1, "medium": 3, "deep": 5}
@@ -266,13 +267,19 @@ def _progress_reporter(
         if risk_count > last_risk_count:
             last_risk_count = risk_count
             speaker = risk.get("latest_speaker") or "risk agent"
-            total = 3 * config["max_risk_discuss_rounds"]
-            emit(f"risk discussion {risk_count}/{total}: {speaker}")
-            if risk_count >= total and not portfolio_done:
+            phase = "independent assessment" if risk_count <= 3 else "cross-review"
+            emit(f"risk {phase} {risk_count}/{RISK_ANALYSIS_TOTAL_TURNS}: {speaker}")
+            if risk_count >= RISK_ANALYSIS_TOTAL_TURNS and not portfolio_done:
                 emit("requesting portfolio manager decision")
             emitted = True
         if risk.get("judge_decision") and not portfolio_done:
             portfolio_done = True
+            status = risk.get("risk_integrity_status")
+            findings = risk.get("risk_integrity_findings") or []
+            if status == "WARN":
+                emit(f"risk integrity check: WARN ({len(findings)} finding(s))")
+            elif status:
+                emit(f"risk integrity check: {status}")
             emit("portfolio manager completed")
             emitted = True
 
@@ -304,18 +311,23 @@ def result_document(execution, report_root: Path) -> dict[str, Any]:
         "status": "ok",
         "rating": rating,
         "rating_parse_status": "parsed" if rating is not None else "unparsed",
-        "action": extract_choice(trader_plan, _ACTIONS, label_words=("action",)),
+        "action": extract_choice(
+            trader_plan, _ACTIONS, label_words=("action", "acción", "accion")
+        ),
         "entry_price": _number_field(trader_plan, "Entry Price"),
         "stop_loss": _number_field(trader_plan, "Stop Loss"),
         "summary": _field(final_decision, "Executive Summary"),
         "research_recommendation": extract_choice(
-            research_plan, RATINGS_5_TIER, label_words=("recommendation", "rating")
+            research_plan, RATINGS_5_TIER,
+            label_words=("recommendation", "rating", "recomendación", "recomendacion"),
         ),
         "portfolio_manager_rating": rating,
+        "portfolio_disposition": state.get("risk_debate_state", {}).get("portfolio_disposition") or None,
         "raw_final_decision": final_decision or None,
         "report_path": report_path,
         "run_duration_seconds": round(execution.duration_seconds, 3),
         "stats": execution.stats,
+        "fallback_warnings": execution.fallback_warnings,
         "research_execution": _research_execution(state),
     }
 
@@ -619,6 +631,12 @@ def run_batch_analysis(
         if result["status"] == "ok":
             stats = result["stats"]
             research = result["research_execution"]
+            fallback_warnings = result.get("fallback_warnings", 0)
+            fallback_suffix = (
+                f" | completed with {fallback_warnings} fallback warning(s)"
+                if fallback_warnings
+                else ""
+            )
             progress(
                 f"[{index}/{len(tickers)}] {ticker} - completed in "
                 f"{format_duration(result['run_duration_seconds'])} | "
@@ -626,7 +644,7 @@ def run_batch_analysis(
                 f"tokens {stats['tokens_in']} in/{stats['tokens_out']} out | "
                 f"verifier {research['verification_status']} "
                 f"({research['verifier_passes']} pass(es), "
-                f"{research['repair_rounds']} repair(s))"
+                f"{research['repair_rounds']} repair(s)){fallback_suffix}"
             )
         else:
             stage = result.get("failure_stage") or "unknown"
